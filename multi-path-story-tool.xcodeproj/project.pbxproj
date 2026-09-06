@@ -29,6 +29,7 @@
 
 /* Begin PBXFileReference section */
 		B514BA0F30479A810013936A /* StoryGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryGroupView.swift; sourceTree = "<group>"; };
+		B514BA61304CE5260013936A /* multi-path-story-tool.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = "multi-path-story-tool.xcodeproj"; sourceTree = "<group>"; };
 		B559465B303A78F900729C60 /* multi-path-story-tool.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "multi-path-story-tool.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B5594668303A78FB00729C60 /* multi-path-story-toolTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "multi-path-story-toolTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B5594672303A78FB00729C60 /* multi-path-story-toolUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "multi-path-story-toolUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -77,6 +78,13 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		B514BA62304CE5260013936A /* Products */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
 		B5594652303A78F900729C60 = {
 			isa = PBXGroup;
 			children = (
@@ -204,6 +212,12 @@
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B559465C303A78F900729C60 /* Products */;
 			projectDirPath = "";
+			projectReferences = (
+				{
+					ProductGroup = B514BA62304CE5260013936A /* Products */;
+					ProjectRef = B514BA61304CE5260013936A /* multi-path-story-tool.xcodeproj */;
+				},
+			);
 			projectRoot = "";
 			targets = (
 				B559465A303A78F900729C60 /* multi-path-story-tool */,
