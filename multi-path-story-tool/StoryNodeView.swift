@@ -42,12 +42,13 @@ struct StoryNodeView: View {
             } else {
                 Text(node.name)
                     .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(textAlignment)
             }
         }
         .padding(.horizontal, 10)
-        .frame(width: nodeWidth, height: nodeHeight)
+        .padding(.vertical, 10)
+        .frame(minWidth: nodeWidth, maxWidth: nodeWidth, minHeight: nodeHeight)
         .background(
             RoundedRectangle(cornerRadius: 10)
                 .fill(cardBackground)
@@ -73,6 +74,7 @@ struct StoryNodeView: View {
             startEditing()
         }
         .onTapGesture(count: 1) {
+            NSLog("DEBUG_TAP fired for %@", node.name)
             if let fromID = vm.connectingFromNodeID, fromID != node.id {
                 vm.addConnection(from: fromID, to: node.id)
                 vm.connectingFromNodeID = nil
@@ -161,7 +163,7 @@ struct StoryNodeView: View {
                 }
             }
             Divider()
-            Button("Delete Node", role: .destructive) {
+            Button("Delete Story Entry", role: .destructive) {
                 vm.deleteNode(node.id)
             }
         }

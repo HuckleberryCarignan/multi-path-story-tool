@@ -34,6 +34,21 @@ final class multi_path_story_toolUITests: XCTestCase {
     }
 
     @MainActor
+    func testSelectStoryEntryWithCrashFileLoaded() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["MPST_TEST_OPEN_FILE"] = "/Users/christophercarignan/Documents/Crash.mpst"
+        app.launch()
+
+        let introNode = app.staticTexts["Intro"]
+        XCTAssertTrue(introNode.waitForExistence(timeout: 5), "Intro node should render on the canvas")
+
+        introNode.click()
+
+        XCTAssertTrue(app.staticTexts["Story Entry"].waitForExistence(timeout: 2),
+                       "Clicking a Story Entry should populate the detail panel")
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {

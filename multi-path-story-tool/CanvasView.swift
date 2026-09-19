@@ -17,6 +17,8 @@ struct CanvasView: View {
     @State private var groupBoxResizeOffsets: [UUID: CGSize] = [:]
     @State private var drawGroupStart:        CGPoint?       = nil
     @State private var drawGroupCurrent:      CGPoint?       = nil
+    @State private var rubberBandStart:       CGPoint?       = nil
+    @State private var rubberBandCurrent:     CGPoint?       = nil
     @AppStorage("showTooltips") private var showTooltips: Bool = true
 
     var effectiveOffset: CGSize {
@@ -38,6 +40,7 @@ struct CanvasView: View {
                             }
                     )
                     .onTapGesture {
+                        NSLog("DEBUG_BACKGROUND_TAP fired")
                         isFocused = true
                         vm.connectingFromNodeID  = nil
                         vm.selectedNodeID        = nil
@@ -125,9 +128,10 @@ struct CanvasView: View {
                         .scaleEffect(s)
                         .frame(width: nodeWidth * s, height: nodeHeight * s)
                         .position(x: cx, y: cy)
-                        .gesture(
+                        .simultaneousGesture(
                             DragGesture(minimumDistance: 3)
                                 .onChanged { v in
+                                    NSLog("DEBUG_DRAG changed for %@ translation=%@", node.name, "\(v.translation)")
                                     if nodeDragOffsets[node.id] == nil {
                                         let isGroup = vm.selectedNodeIDs.contains(node.id)
                                                    && vm.selectedNodeIDs.count > 1
@@ -182,6 +186,27 @@ struct CanvasView: View {
                 if vm.connectingFromNodeID != nil {
                     ConnectingBanner()
                 }
+
+                // Rubber-band selection rectangle (visible on top, non-interactive)
+                if let s = rubberBandStart, let c = rubberBandCurrent {
+                    let r = rubberBandScreenRect(s, c)
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(Color.accentColor.opacity(0.85),
+                                      style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+                        .background(RoundedRectangle(cornerRadius: 4)
+                                        .fill(Color.accentColor.opacity(0.07)))
+                        .frame(width: max(1, r.width), height: max(1, r.height))
+                        .position(x: r.midX, y: r.midY)
+                        .allowsHitTesting(false)
+                }
+
+                // Hidden buttons so ⌘C / ⌘V work while the canvas is focused
+                Button("") { vm.copySelectedNodes() }
+                    .keyboardShortcut("c", modifiers: .command)
+                    .opacity(0).allowsHitTesting(false)
+                Button("") { vm.pasteNodes() }
+                    .keyboardShortcut("v", modifiers: .command)
+                    .opacity(0).allowsHitTesting(false)
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .clipped()
@@ -230,6 +255,10 @@ struct CanvasView: View {
                     vm.deleteGroup(id)
                 } else if let id = vm.selectedConnectionID {
                     vm.removeConnection(id)
+                } else if vm.selectedNodeIDs.count > 1 {
+                    vm.deleteSelectedNodes()
+                } else if let id = vm.selectedNodeID {
+                    vm.deleteNode(id)
                 }
             }
             .onHover { hovering in scrollMonitor.isMouseOverCanvas = hovering }
@@ -299,6 +328,22 @@ struct CanvasView: View {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.15), lineWidth: 1))
             .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 2)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { v in
+                        let worldX = (v.location.x - ox) / scale + worldBounds.minX
+                        let worldY = (v.location.y - oy) / scale + worldBounds.minY
+                        panDelta = .zero
+                        canvasOffset = CGSize(
+                            width:  geo.size.width  / 2 - worldX * canvasScale,
+                            height: geo.size.height / 2 - worldY * canvasScale
+                        )
+                    }
+            )
+            .onHover { hovering in
+                if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+            .help(showTooltips ? "Click or drag to navigate the canvas" : "")
             .padding(12)
         }
     }
@@ -459,6 +504,30 @@ struct CanvasView: View {
         }
     }
 
+    private func rubberBandScreenRect(_ a: CGPoint, _ b: CGPoint) -> CGRect {
+        CGRect(x: min(a.x, b.x), y: min(a.y, b.y),
+               width: abs(a.x - b.x), height: abs(a.y - b.y))
+    }
+
+    private func selectNodesInRubberBand(start: CGPoint, end: CGPoint) {
+        let sr = rubberBandScreenRect(start, end)
+        guard sr.width > 4, sr.height > 4 else { return }
+        let offset = effectiveOffset
+        let scale  = canvasScale
+        let worldRect = CGRect(
+            x: (sr.minX - offset.width)  / scale,
+            y: (sr.minY - offset.height) / scale,
+            width:  sr.width  / scale,
+            height: sr.height / scale
+        )
+        let hits = vm.nodes.filter { worldRect.intersects($0.rect) }
+        guard !hits.isEmpty else { return }
+        vm.selectedNodeIDs      = Set(hits.map { $0.id })
+        vm.selectedNodeID       = hits.first?.id
+        vm.selectedConnectionID = nil
+        vm.selectedGroupID      = nil
+    }
+
     private func zoomToFit(size: CGSize) {
         guard !vm.nodes.isEmpty else { return }
         let pad: CGFloat = 60
@@ -584,6 +653,72 @@ struct CanvasGridView: View {
         .background(backgroundView)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
+    }
+}
+
+// Captures right-click drag on the canvas background for rubber-band selection.
+private struct RightClickDragCapture: NSViewRepresentable {
+    var isOverNode:    (CGPoint) -> Bool
+    var isDrawingGroup: Bool
+    var onDragChanged: (CGPoint, CGPoint) -> Void
+    var onDragEnded:   (CGPoint, CGPoint) -> Void
+
+    func makeNSView(context: Context) -> RightClickDragView { RightClickDragView() }
+
+    func updateNSView(_ v: RightClickDragView, context: Context) {
+        v.isOverNode     = isOverNode
+        v.isDrawingGroup = isDrawingGroup
+        v.onDragChanged  = onDragChanged
+        v.onDragEnded    = onDragEnded
+    }
+}
+
+private class RightClickDragView: NSView {
+    var isOverNode:     ((CGPoint) -> Bool)?
+    var isDrawingGroup: Bool = false
+    var onDragChanged:  ((CGPoint, CGPoint) -> Void)?
+    var onDragEnded:    ((CGPoint, CGPoint) -> Void)?
+    private var startPoint: CGPoint?
+
+    override var isFlipped: Bool { true }   // match SwiftUI's top-left origin
+
+    // Only claim hit-testing for right-mouse events so left clicks/drags fall through
+    // to the SwiftUI node views underneath instead of being swallowed by this overlay.
+    // Once a right-mouse-down is accepted here, AppKit keeps routing the rest of that
+    // drag to this same view automatically, so later hitTest calls don't need to care.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        switch NSApp.currentEvent?.type {
+        case .rightMouseDown, .rightMouseDragged, .rightMouseUp:
+            return super.hitTest(point)
+        default:
+            return nil
+        }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        let pt = convert(event.locationInWindow, from: nil)
+        // Defer to the responder chain for node context menus or group drawing mode.
+        if isDrawingGroup || isOverNode?(pt) == true {
+            nextResponder?.rightMouseDown(with: event)
+            return
+        }
+        startPoint = pt
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        guard let start = startPoint else { return }
+        let pt = convert(event.locationInWindow, from: nil)
+        onDragChanged?(start, pt)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        guard let start = startPoint else {
+            nextResponder?.rightMouseUp(with: event)
+            return
+        }
+        let pt = convert(event.locationInWindow, from: nil)
+        onDragEnded?(start, pt)
+        startPoint = nil
     }
 }
 

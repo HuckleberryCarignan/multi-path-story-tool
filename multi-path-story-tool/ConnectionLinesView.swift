@@ -8,6 +8,26 @@ private let bridgeRadius:  CGFloat = 7
 private enum Port: CaseIterable {
     case top, bottom, left, right
 
+    init?(_ raw: String) {
+        switch raw {
+        case "top":    self = .top
+        case "bottom": self = .bottom
+        case "left":   self = .left
+        case "right":  self = .right
+        default:       return nil
+        }
+    }
+
+    var rawString: String {
+        switch self { case .top: return "top"; case .bottom: return "bottom"
+                      case .left: return "left"; case .right: return "right" }
+    }
+
+    var displayName: String {
+        switch self { case .top: return "Top"; case .bottom: return "Bottom"
+                      case .left: return "Left"; case .right: return "Right" }
+    }
+
     // Unit vector pointing AWAY from the node face.
     var dx: CGFloat { self == .left ? -1 : self == .right ?  1 : 0 }
     var dy: CGFloat { self == .top  ? -1 : self == .bottom ? 1 : 0 }
@@ -73,26 +93,34 @@ private func computePortAssignments(
               let dst = nodes.first(where: { $0.id == conn.toNodeID }) else { continue }
 
         let fo = offset(src.id), to_ = offset(dst.id)
-        let blockedExit  = entryUsed[src.id] ?? []  // sides where others enter src
-        let blockedEntry = entryUsed[dst.id] ?? []  // sides already used as entry on dst
+        let blockedExit = entryUsed[src.id] ?? []  // sides where others enter src
 
-        var best: (exit: Port, entry: Port, dist: CGFloat)? = nil
-        for ep in Port.allCases where !blockedExit.contains(ep) {
-            let fromPt = ep.portCenter(of: src, offset: fo, scale: s)
-            for np in Port.allCases where !blockedEntry.contains(np) {
-                let toPt = np.portCenter(of: dst, offset: to_, scale: s)
-                let d    = hypot(toPt.x - fromPt.x, toPt.y - fromPt.y)
-                if best == nil || d < best!.dist { best = (ep, np, d) }
+        // Use per-connection overrides when set; entry defaults to top,
+        // exit defaults to the face closest to the entry port.
+        let entryPort: Port = conn.entryPortOverride.flatMap { Port($0) } ?? .top
+        let toPt = entryPort.portCenter(of: dst, offset: to_, scale: s)
+
+        let exitPort: Port
+        if let raw = conn.exitPortOverride, let overridden = Port(raw),
+           !blockedExit.contains(overridden) {
+            exitPort = overridden
+        } else {
+            var best: (exit: Port, dist: CGFloat)? = nil
+            for ep in Port.allCases where !blockedExit.contains(ep) {
+                let fromPt = ep.portCenter(of: src, offset: fo, scale: s)
+                let d = hypot(toPt.x - fromPt.x, toPt.y - fromPt.y)
+                if best == nil || d < best!.dist { best = (ep, d) }
             }
+            guard let chosen = best else { continue }
+            exitPort = chosen.exit
         }
-        guard let chosen = best else { continue }
 
-        entryUsed[dst.id, default: []].insert(chosen.entry)
+        entryUsed[dst.id, default: []].insert(entryPort)
         result[conn.id] = PortAssignment(
-            from:      chosen.exit.portCenter(of: src, offset: fo,  scale: s),
-            to:        chosen.entry.portCenter(of: dst, offset: to_, scale: s),
-            exitPort:  chosen.exit,
-            entryPort: chosen.entry
+            from:      exitPort.portCenter(of: src, offset: fo,  scale: s),
+            to:        toPt,
+            exitPort:  exitPort,
+            entryPort: entryPort
         )
     }
     return result
@@ -113,79 +141,154 @@ struct ConnectionLinesView: View {
         let offset       = canvasOffset
         let drags        = dragOffsets
         let scale        = canvasScale
+        // Computed once so both the canvas and the handle overlay share the same layout.
+        let assignments  = computePortAssignments(
+            connections: connections, nodes: nodes,
+            dragOffsets: drags, canvasScale: scale
+        )
+        let xform = CGAffineTransform(a: scale, b: 0, c: 0, d: scale,
+                                      tx: offset.width, ty: offset.height)
 
-        Canvas { ctx, _ in
-            let assignments = computePortAssignments(
-                connections: connections, nodes: nodes,
-                dragOffsets: drags, canvasScale: scale
-            )
-            let xform = CGAffineTransform(a: scale, b: 0, c: 0, d: scale,
-                                          tx: offset.width, ty: offset.height)
+        ZStack {
+            Canvas { ctx, _ in
+                // Phase 1: build all routed paths and sample them for crossing detection
+                var allPaths: [ConnPathData] = []
+                for conn in connections {
+                    guard let pa = assignments[conn.id] else { continue }
+                    let excludeIDs: Set<UUID> = [conn.fromNodeID, conn.toNodeID]
+                    let (canvasPath, canvasApproach) = routedPath(
+                        rawFrom: pa.from, rawTo: pa.to,
+                        exitPort: pa.exitPort, entryPort: pa.entryPort,
+                        excludeIDs: excludeIDs, nodes: nodes
+                    )
+                    let path = canvasPath.applying(xform)
+                    let tipWorld = CGPoint(x: pa.to.x + pa.entryPort.dx * routingBuffer,
+                                          y: pa.to.y + pa.entryPort.dy * routingBuffer)
+                    let tip      = tipWorld.applying(xform)
+                    let approach = canvasApproach.applying(xform)
+                    let isSelected = selectedID == conn.id
+                    let color: Color = conn.isOrphaned
+                        ? .red
+                        : pastelColors[conn.colorIndex % pastelColors.count]
+                    allPaths.append(ConnPathData(
+                        path: path, color: color, isSelected: isSelected,
+                        approach: approach, tip: tip, samples: samplePath(path)
+                    ))
+                }
 
-            // Phase 1: build all routed paths and sample them for crossing detection
-            var allPaths: [ConnPathData] = []
-            for conn in connections {
-                guard let pa = assignments[conn.id] else { continue }
-                let excludeIDs: Set<UUID> = [conn.fromNodeID, conn.toNodeID]
-                let (canvasPath, canvasApproach) = routedPath(
-                    rawFrom: pa.from, rawTo: pa.to,
-                    exitPort: pa.exitPort, entryPort: pa.entryPort,
-                    excludeIDs: excludeIDs, nodes: nodes
-                )
-                let path = canvasPath.applying(xform)
-                // Tip is just outside the entry face (same formula as `end` in routedPath)
-                let tipWorld = CGPoint(x: pa.to.x + pa.entryPort.dx * routingBuffer,
-                                      y: pa.to.y + pa.entryPort.dy * routingBuffer)
-                let tip      = tipWorld.applying(xform)
-                let approach = canvasApproach.applying(xform)
-                let isSelected = selectedID == conn.id
-                let color: Color = conn.isOrphaned
-                    ? .red
-                    : pastelColors[conn.colorIndex % pastelColors.count]
-                allPaths.append(ConnPathData(
-                    path: path, color: color, isSelected: isSelected,
-                    approach: approach, tip: tip, samples: samplePath(path)
-                ))
-            }
+                // Phase 2: find crossings — record gap centres for the "under" path
+                var underGaps: [Int: [CGPoint]] = [:]
+                if allPaths.count >= 2 {
+                    for i in 0..<allPaths.count {
+                        for j in (i + 1)..<allPaths.count {
+                            for pt in findIntersections(allPaths[i].samples, allPaths[j].samples) {
+                                underGaps[i, default: []].append(pt)
+                            }
+                        }
+                    }
+                }
 
-            // Phase 2: find crossings — record gap centres for the "under" path
-            var underGaps: [Int: [CGPoint]] = [:]
-            if allPaths.count >= 2 {
-                for i in 0..<allPaths.count {
-                    for j in (i + 1)..<allPaths.count {
-                        for pt in findIntersections(allPaths[i].samples, allPaths[j].samples) {
-                            underGaps[i, default: []].append(pt)
+                // Phase 3: draw each path; stamp bridge knockouts where it goes "under"
+                let bgColor = Color(nsColor: .windowBackgroundColor)
+                for (i, pd) in allPaths.enumerated() {
+                    if pd.isSelected {
+                        ctx.stroke(pd.path, with: .color(.white.opacity(0.9)),
+                                   style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                        ctx.stroke(pd.path, with: .color(.accentColor.opacity(0.45)),
+                                   style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                    }
+                    ctx.stroke(pd.path, with: .color(pd.color),
+                               style: StrokeStyle(lineWidth: pd.isSelected ? 3.5 : 2.5, lineCap: .round))
+                    drawArrowHead(ctx: ctx, tip: pd.tip, approach: pd.approach, color: pd.color)
+
+                    if let gaps = underGaps[i] {
+                        let r = bridgeRadius
+                        for pt in gaps {
+                            ctx.fill(
+                                Path(ellipseIn: CGRect(x: pt.x - r, y: pt.y - r,
+                                                       width: r * 2, height: r * 2)),
+                                with: .color(bgColor)
+                            )
                         }
                     }
                 }
             }
+            .allowsHitTesting(false)
 
-            // Phase 3: draw each path; stamp bridge knockouts where it goes "under"
-            let bgColor = Color(nsColor: .windowBackgroundColor)
-            for (i, pd) in allPaths.enumerated() {
-                if pd.isSelected {
-                    ctx.stroke(pd.path, with: .color(.white.opacity(0.9)),
-                               style: StrokeStyle(lineWidth: 10, lineCap: .round))
-                    ctx.stroke(pd.path, with: .color(.accentColor.opacity(0.45)),
-                               style: StrokeStyle(lineWidth: 8, lineCap: .round))
+            // Draggable port handles — shown over the selected connection.
+            endpointHandles(connections: connections, nodes: nodes,
+                            assignments: assignments, selectedID: selectedID,
+                            offset: offset, scale: scale)
+        }
+    }
+
+    // MARK: - Endpoint handles
+
+    @ViewBuilder
+    private func endpointHandles(
+        connections: [NodeConnection],
+        nodes: [StoryNode],
+        assignments: [UUID: PortAssignment],
+        selectedID: UUID?,
+        offset: CGSize,
+        scale: CGFloat
+    ) -> some View {
+        if let selID = selectedID,
+           let conn = connections.first(where: { $0.id == selID && !$0.isOrphaned }),
+           let pa   = assignments[selID]
+        {
+            let exitPt  = CGPoint(x: pa.from.x * scale + offset.width,
+                                   y: pa.from.y * scale + offset.height)
+            let entryPt = CGPoint(x: pa.to.x   * scale + offset.width,
+                                   y: pa.to.y   * scale + offset.height)
+
+            if let src = nodes.first(where: { $0.id == conn.fromNodeID }) {
+                portHandle(at: exitPt, tint: .orange,
+                           label: "Drag to change which side the line exits from") { screenPos in
+                    let wp = CGPoint(x: (screenPos.x - offset.width)  / scale,
+                                     y: (screenPos.y - offset.height) / scale)
+                    vm.setConnectionExitPort(conn.id, port: nearestPort(to: wp, on: src).rawString)
                 }
-                ctx.stroke(pd.path, with: .color(pd.color),
-                           style: StrokeStyle(lineWidth: pd.isSelected ? 3.5 : 2.5, lineCap: .round))
-                drawArrowHead(ctx: ctx, tip: pd.tip, approach: pd.approach, color: pd.color)
+            }
 
-                if let gaps = underGaps[i] {
-                    let r = bridgeRadius
-                    for pt in gaps {
-                        ctx.fill(
-                            Path(ellipseIn: CGRect(x: pt.x - r, y: pt.y - r,
-                                                   width: r * 2, height: r * 2)),
-                            with: .color(bgColor)
-                        )
-                    }
+            if let dst = nodes.first(where: { $0.id == conn.toNodeID }) {
+                portHandle(at: entryPt, tint: Color(red: 0.25, green: 0.60, blue: 0.95),
+                           label: "Drag to change which side the line enters from") { screenPos in
+                    let wp = CGPoint(x: (screenPos.x - offset.width)  / scale,
+                                     y: (screenPos.y - offset.height) / scale)
+                    vm.setConnectionEntryPort(conn.id, port: nearestPort(to: wp, on: dst).rawString)
                 }
             }
         }
-        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func portHandle(at position: CGPoint, tint: Color, label: String,
+                             onDrag: @escaping (CGPoint) -> Void) -> some View {
+        Circle()
+            .fill(tint)
+            .frame(width: 16, height: 16)
+            .overlay(Circle().strokeBorder(.white, lineWidth: 2.5))
+            .shadow(color: .black.opacity(0.35), radius: 3, x: 0, y: 1)
+            .position(position)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { v in
+                        onDrag(CGPoint(x: position.x + v.translation.width,
+                                       y: position.y + v.translation.height))
+                    }
+            )
+            .onHover { h in if h { NSCursor.openHand.push() } else { NSCursor.pop() } }
+            .help(label)
+    }
+
+    private func nearestPort(to worldPos: CGPoint, on node: StoryNode) -> Port {
+        Port.allCases.min(by: { a, b in
+            let pa = a.portCenter(of: node)
+            let pb = b.portCenter(of: node)
+            return hypot(pa.x - worldPos.x, pa.y - worldPos.y)
+                 < hypot(pb.x - worldPos.x, pb.y - worldPos.y)
+        })!
     }
 
     // MARK: - Path sampling & intersection detection
@@ -251,8 +354,7 @@ struct ConnectionLinesView: View {
     // MARK: - Routing
 
     // Builds a bezier that departs in the exit-port direction and arrives in the
-    // entry-port direction, using the port's unit vector to drive both the buffer
-    // step and the control-point offset.
+    // entry-port direction, with obstacle avoidance for all port combinations.
     private func routedPath(rawFrom: CGPoint, rawTo: CGPoint,
                              exitPort: Port, entryPort: Port,
                              excludeIDs: Set<UUID>,
@@ -268,24 +370,19 @@ struct ConnectionLinesView: View {
                             y: end.y   + entryPort.dy * curveStrength)
 
         // Bottom→top inverted: source exit is at or below target entry.
-        // Route around the rightmost node edge instead of looping back.
         if exitPort == .bottom && entryPort == .top && start.y >= end.y - buf {
             return sideRoutedPath(start: start, end: end,
                                   excludeIDs: excludeIDs, nodes: nodes, buf: buf)
         }
 
-        // Bottom→top normal: avoid intermediate nodes that block the direct curve.
-        if exitPort == .bottom && entryPort == .top {
-            let blockers = crossedRects(from: start, to: end, cp1: cp1, cp2: cp2,
-                                        excludeIDs: excludeIDs, nodes: nodes, buffer: buf)
-            if !blockers.isEmpty {
-                let blockRect = blockers.dropFirst().reduce(blockers[0]) { $0.union($1) }
-                let midX   = (start.x + end.x) / 2
-                let leftX  = blockRect.minX - buf
-                let rightX = blockRect.maxX + buf
-                let sideX  = abs(leftX - midX) <= abs(rightX - midX) ? leftX : rightX
-                return waypointPath(start: start, end: end, sideX: sideX)
-            }
+        // General obstacle avoidance for all port combinations.
+        let blockers = crossedRects(from: start, to: end, cp1: cp1, cp2: cp2,
+                                    excludeIDs: excludeIDs, nodes: nodes, buffer: buf)
+        if !blockers.isEmpty {
+            let blockRect = blockers.dropFirst().reduce(blockers[0]) { $0.union($1) }
+            return avoidBlockers(start: start, end: end,
+                                  exitPort: exitPort, entryPort: entryPort,
+                                  blockRect: blockRect)
         }
 
         var path = Path()
@@ -321,19 +418,52 @@ struct ConnectionLinesView: View {
         return (path, s3cp2)
     }
 
-    private func waypointPath(start: CGPoint, end: CGPoint,
-                              sideX: CGFloat) -> (path: Path, approach: CGPoint) {
-        let wp    = CGPoint(x: sideX, y: (start.y + end.y) / 2)
-        let cp1a  = CGPoint(x: start.x, y: start.y + curveStrength * 0.6)
-        let cp2a  = CGPoint(x: sideX,   y: wp.y    - curveStrength * 0.6)
-        let cp1b  = CGPoint(x: sideX,   y: wp.y    + curveStrength * 0.6)
-        let cp2b  = CGPoint(x: end.x,   y: end.y   - curveStrength * 0.6)
-        var path  = Path()
+    // Picks the shortest waypoint around all four sides of the blocking rect.
+    private func avoidBlockers(start: CGPoint, end: CGPoint,
+                                exitPort: Port, entryPort: Port,
+                                blockRect: CGRect) -> (path: Path, approach: CGPoint) {
+        let margin = sideMargin
+        let midX   = (start.x + end.x) / 2
+        let midY   = (start.y + end.y) / 2
+        let candidates: [CGPoint] = [
+            CGPoint(x: midX,                    y: blockRect.minY - margin),
+            CGPoint(x: midX,                    y: blockRect.maxY + margin),
+            CGPoint(x: blockRect.minX - margin, y: midY),
+            CGPoint(x: blockRect.maxX + margin, y: midY),
+        ]
+        let wp = candidates.min(by: {
+            ptDist($0, start) + ptDist($0, end) < ptDist($1, start) + ptDist($1, end)
+        })!
+        return twoSegmentPath(start: start, end: end, waypoint: wp,
+                               exitPort: exitPort, entryPort: entryPort)
+    }
+
+    // Two-segment bezier through an intermediate waypoint.
+    private func twoSegmentPath(start: CGPoint, end: CGPoint, waypoint: CGPoint,
+                                 exitPort: Port, entryPort: Port) -> (path: Path, approach: CGPoint) {
+        let cs   = curveStrength
+        let d1x  = waypoint.x - start.x,   d1y = waypoint.y - start.y
+        let len1 = max(1, hypot(d1x, d1y))
+        let d2x  = end.x - waypoint.x,     d2y = end.y - waypoint.y
+        let len2 = max(1, hypot(d2x, d2y))
+
+        let cp1a = CGPoint(x: start.x    + exitPort.dx  * min(cs, len1 * 0.5),
+                           y: start.y    + exitPort.dy  * min(cs, len1 * 0.5))
+        let cp2a = CGPoint(x: waypoint.x - d1x / len1  * min(cs * 0.4, len1 * 0.3),
+                           y: waypoint.y - d1y / len1  * min(cs * 0.4, len1 * 0.3))
+        let cp1b = CGPoint(x: waypoint.x + d2x / len2  * min(cs * 0.4, len2 * 0.3),
+                           y: waypoint.y + d2y / len2  * min(cs * 0.4, len2 * 0.3))
+        let cp2b = CGPoint(x: end.x      + entryPort.dx * min(cs, len2 * 0.5),
+                           y: end.y      + entryPort.dy * min(cs, len2 * 0.5))
+
+        var path = Path()
         path.move(to: start)
-        path.addCurve(to: wp,  control1: cp1a, control2: cp2a)
-        path.addCurve(to: end, control1: cp1b, control2: cp2b)
+        path.addCurve(to: waypoint, control1: cp1a, control2: cp2a)
+        path.addCurve(to: end,      control1: cp1b, control2: cp2b)
         return (path, cp2b)
     }
+
+    private func ptDist(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(b.x - a.x, b.y - a.y) }
 
     private func crossedRects(from: CGPoint, to: CGPoint,
                                cp1: CGPoint, cp2: CGPoint,
@@ -420,6 +550,9 @@ private struct ConnectionHitPath: View {
         let cp1   = CGPoint(x: from.x + ep.dx * cs, y: from.y + ep.dy * cs)
         let cp2   = CGPoint(x: to.x   + np.dx * cs, y: to.y   + np.dy * cs)
 
+        let currentEntry: Port = conn.entryPortOverride.flatMap { Port($0) } ?? .top
+        let currentExit:  Port = conn.exitPortOverride.flatMap  { Port($0) } ?? portAssignment.exitPort
+
         Path { p in
             p.move(to: from)
             p.addCurve(to: to, control1: cp1, control2: cp2)
@@ -428,6 +561,45 @@ private struct ConnectionHitPath: View {
         .onTapGesture {
             vm.selectedConnectionID = conn.id
             vm.selectedNodeID       = nil
+        }
+        .contextMenu {
+            Text("Entry Side")
+            Divider()
+            ForEach([Port.top, .bottom, .left, .right], id: \.rawString) { port in
+                Button {
+                    vm.setConnectionEntryPort(conn.id, port: port.rawString)
+                } label: {
+                    if currentEntry == port {
+                        Label(port.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(port.displayName)
+                    }
+                }
+            }
+            if conn.entryPortOverride != nil {
+                Button("Reset Entry to Default") {
+                    vm.setConnectionEntryPort(conn.id, port: nil)
+                }
+            }
+            Divider()
+            Text("Exit Side")
+            Divider()
+            ForEach([Port.top, .bottom, .left, .right], id: \.rawString) { port in
+                Button {
+                    vm.setConnectionExitPort(conn.id, port: port.rawString)
+                } label: {
+                    if currentExit == port {
+                        Label(port.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(port.displayName)
+                    }
+                }
+            }
+            if conn.exitPortOverride != nil {
+                Button("Reset Exit to Default") {
+                    vm.setConnectionExitPort(conn.id, port: nil)
+                }
+            }
         }
     }
 }

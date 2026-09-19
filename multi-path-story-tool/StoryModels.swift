@@ -99,6 +99,10 @@ struct NodeConnection: Identifiable, Codable, Equatable {
     var colorIndex: Int
     var orphanedFromPos: CGPoint?
     var orphanedToPos: CGPoint?
+    // "top" | "bottom" | "left" | "right" | nil = default (top)
+    var entryPortOverride: String?
+    // "top" | "bottom" | "left" | "right" | nil = default (closest to entry)
+    var exitPortOverride: String?
 
     init(id: UUID = UUID(), fromNodeID: UUID, toNodeID: UUID, colorIndex: Int = 0) {
         self.id = id
@@ -106,5 +110,7 @@ struct NodeConnection: Identifiable, Codable, Equatable {
         self.toNodeID = toNodeID
         self.isOrphaned = false
         self.colorIndex = colorIndex
+        self.entryPortOverride = nil
+        self.exitPortOverride = nil
     }
 }

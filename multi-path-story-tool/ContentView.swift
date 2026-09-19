@@ -29,7 +29,12 @@ struct ContentView: View {
         }
         .frame(minWidth: 860, minHeight: 520)
         .preferredColorScheme(appearanceMode == "dark" ? .dark : .light)
-        .onAppear { vm.undoManager = undoManager }
+        .onAppear {
+            vm.undoManager = undoManager
+            if let path = ProcessInfo.processInfo.environment["MPST_TEST_OPEN_FILE"] {
+                vm.loadFromDisk(url: URL(fileURLWithPath: path))
+            }
+        }
         .onChange(of: undoManager) { _, um in vm.undoManager = um }
         .overlay {
             if vm.isDialogueExpanded,
@@ -172,16 +177,36 @@ struct ContentView: View {
 
     private var canvasPanel: some View {
         VStack(spacing: 0) {
-            Text("Story Canvas")
-                .font(.headline)
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(appearanceMode == "color"
-                    ? Color(red: 1.00, green: 0.84, blue: 0.88)
-                    : Color(nsColor: .controlBackgroundColor))
+            HStack(spacing: 0) {
+                Text("Story Canvas")
+                    .font(.headline)
+                Spacer()
+                canvasStat(count: vm.nodes.count, label: "Story Entries")
+                Divider()
+                    .frame(height: 24)
+                    .padding(.horizontal, 12)
+                canvasStat(count: vm.connections.filter { !$0.isOrphaned }.count, label: "Decisions")
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(appearanceMode == "color"
+                ? Color(red: 1.00, green: 0.84, blue: 0.88)
+                : Color(nsColor: .controlBackgroundColor))
             Divider()
             CanvasView(vm: vm)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func canvasStat(count: Int, label: String) -> some View {
+        VStack(spacing: 1) {
+            Text("\(count)")
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+            Text(label)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
         }
     }
 

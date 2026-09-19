@@ -93,6 +93,7 @@
 				B5594675303A78FB00729C60 /* multi-path-story-toolUITests */,
 				B559465C303A78F900729C60 /* Products */,
 				B514BA0F30479A810013936A /* StoryGroupView.swift */,
+				B5FD1D44305E17BD009B49F9 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -104,6 +105,14 @@
 				B5594672303A78FB00729C60 /* multi-path-story-toolUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		B5FD1D44305E17BD009B49F9 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				B514BA61304CE5260013936A /* multi-path-story-tool.xcodeproj */,
+			);
+			name = "Recovered References";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */

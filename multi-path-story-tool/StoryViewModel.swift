@@ -270,7 +270,7 @@ class StoryViewModel {
         }
     }
 
-    private func loadFromDisk(url: URL) {
+    func loadFromDisk(url: URL) {
         guard let data = try? Data(contentsOf: url) else {
             let alert = NSAlert()
             alert.alertStyle = .warning
@@ -387,6 +387,95 @@ class StoryViewModel {
         connections.removeAll { $0.id == id }
         if selectedConnectionID == id { selectedConnectionID = nil }
         registerUndo(action: "Remove Connection", from: before)
+    }
+
+    // MARK: - Multi-select operations
+
+    func deleteSelectedNodes() {
+        guard !selectedNodeIDs.isEmpty else { return }
+        let before = checkpoint()
+        for id in selectedNodeIDs {
+            guard let node = nodes.first(where: { $0.id == id }) else { continue }
+            for i in connections.indices {
+                if connections[i].fromNodeID == id {
+                    connections[i].isOrphaned      = true
+                    connections[i].orphanedFromPos = node.bottomCenter
+                }
+                if connections[i].toNodeID == id {
+                    connections[i].isOrphaned     = true
+                    connections[i].orphanedToPos  = node.topCenter
+                }
+            }
+        }
+        nodes.removeAll { selectedNodeIDs.contains($0.id) }
+        if let id = selectedNodeID,        selectedNodeIDs.contains(id) { selectedNodeID        = nil }
+        if let id = connectingFromNodeID,  selectedNodeIDs.contains(id) { connectingFromNodeID  = nil }
+        if let id = startNodeID,           selectedNodeIDs.contains(id) { startNodeID           = nil }
+        selectedNodeIDs = []
+        registerUndo(action: "Delete Entries", from: before)
+    }
+
+    // MARK: - Copy / Paste
+
+    private struct ClipboardPayload {
+        var nodes:       [StoryNode]
+        var connections: [NodeConnection]
+    }
+    private var clipboard: ClipboardPayload?
+
+    func copySelectedNodes() {
+        let selected = nodes.filter { selectedNodeIDs.contains($0.id) }
+        guard !selected.isEmpty else { return }
+        let ids   = Set(selected.map { $0.id })
+        let conns = connections.filter {
+            !$0.isOrphaned && ids.contains($0.fromNodeID) && ids.contains($0.toNodeID)
+        }
+        clipboard = ClipboardPayload(nodes: selected, connections: conns)
+    }
+
+    func pasteNodes() {
+        guard let clip = clipboard, !clip.nodes.isEmpty else { return }
+        let before = checkpoint()
+        var idMap: [UUID: UUID] = [:]
+        var newNodes: [StoryNode] = []
+        for node in clip.nodes {
+            let newID = UUID()
+            idMap[node.id] = newID
+            newNodes.append(StoryNode(
+                id: newID, name: node.name, dialogue: node.dialogue,
+                position: CGPoint(x: node.position.x + 40, y: node.position.y + 40)
+            ))
+        }
+        var newConns: [NodeConnection] = []
+        for conn in clip.connections {
+            guard let f = idMap[conn.fromNodeID], let t = idMap[conn.toNodeID] else { continue }
+            var c = NodeConnection(fromNodeID: f, toNodeID: t,
+                                   colorIndex: nextColorIndex % pastelColors.count)
+            c.entryPortOverride = conn.entryPortOverride
+            c.exitPortOverride  = conn.exitPortOverride
+            nextColorIndex += 1
+            newConns.append(c)
+        }
+        nodes.append(contentsOf: newNodes)
+        connections.append(contentsOf: newConns)
+        selectedNodeIDs      = Set(newNodes.map { $0.id })
+        selectedNodeID       = newNodes.first?.id
+        selectedConnectionID = nil
+        registerUndo(action: "Paste Entries", from: before)
+    }
+
+    func setConnectionEntryPort(_ id: UUID, port: String?) {
+        guard let idx = connections.firstIndex(where: { $0.id == id }) else { return }
+        let before = checkpoint()
+        connections[idx].entryPortOverride = port
+        registerUndo(action: "Change Entry Side", from: before)
+    }
+
+    func setConnectionExitPort(_ id: UUID, port: String?) {
+        guard let idx = connections.firstIndex(where: { $0.id == id }) else { return }
+        let before = checkpoint()
+        connections[idx].exitPortOverride = port
+        registerUndo(action: "Change Exit Side", from: before)
     }
 
     func moveNode(_ id: UUID, by delta: CGSize) {
