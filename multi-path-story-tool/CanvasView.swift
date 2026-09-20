@@ -187,6 +187,28 @@ struct CanvasView: View {
                     ConnectingBanner()
                 }
 
+                // Right-click-drag on empty canvas draws a rubber-band selection box.
+                RightClickDragCapture(
+                    isOverNode: { pt in
+                        let world = CGPoint(
+                            x: (pt.x - effectiveOffset.width)  / canvasScale,
+                            y: (pt.y - effectiveOffset.height) / canvasScale
+                        )
+                        return vm.nodes.contains { $0.rect.contains(world) }
+                    },
+                    isDrawingGroup: vm.isDrawingGroup,
+                    onDragChanged: { start, current in
+                        rubberBandStart   = start
+                        rubberBandCurrent = current
+                    },
+                    onDragEnded: { start, end in
+                        selectNodesInRubberBand(start: start, end: end)
+                        rubberBandStart   = nil
+                        rubberBandCurrent = nil
+                    }
+                )
+                .frame(width: geo.size.width, height: geo.size.height)
+
                 // Rubber-band selection rectangle (visible on top, non-interactive)
                 if let s = rubberBandStart, let c = rubberBandCurrent {
                     let r = rubberBandScreenRect(s, c)
@@ -259,6 +281,28 @@ struct CanvasView: View {
                     vm.deleteSelectedNodes()
                 } else if let id = vm.selectedNodeID {
                     vm.deleteNode(id)
+                }
+            }
+            .onMoveCommand { direction in
+                guard vm.selectedConnectionID == nil, vm.selectedGroupID == nil else { return }
+                let step: CGFloat = vm.snapEnabled ? vm.gridSize : 1
+                let delta: CGSize
+                switch direction {
+                case .up:    delta = CGSize(width: 0, height: -step)
+                case .down:  delta = CGSize(width: 0, height:  step)
+                case .left:  delta = CGSize(width: -step, height: 0)
+                case .right: delta = CGSize(width:  step, height: 0)
+                default: return
+                }
+                if vm.selectedNodeIDs.count > 1 {
+                    var origins: [UUID: CGPoint] = [:]
+                    for id in vm.selectedNodeIDs {
+                        if let node = vm.nodes.first(where: { $0.id == id }) { origins[id] = node.position }
+                    }
+                    vm.finishGroupDrag(ids: vm.selectedNodeIDs, by: delta, from: origins)
+                } else if let id = vm.selectedNodeID,
+                          let node = vm.nodes.first(where: { $0.id == id }) {
+                    vm.finishDrag(id, by: delta, from: node.position)
                 }
             }
             .onHover { hovering in scrollMonitor.isMouseOverCanvas = hovering }
@@ -684,11 +728,21 @@ private class RightClickDragView: NSView {
 
     // Only claim hit-testing for right-mouse events so left clicks/drags fall through
     // to the SwiftUI node views underneath instead of being swallowed by this overlay.
+    // Also decline the hit (return nil) when the click is over a node or group-drawing
+    // mode is active, so the real node view underneath keeps handling its own context
+    // menu — nextResponder from inside rightMouseDown walks the ancestor chain, not
+    // sideways to that sibling view, so deferring there instead of here doesn't work.
     // Once a right-mouse-down is accepted here, AppKit keeps routing the rest of that
     // drag to this same view automatically, so later hitTest calls don't need to care.
     override func hitTest(_ point: NSPoint) -> NSView? {
         switch NSApp.currentEvent?.type {
-        case .rightMouseDown, .rightMouseDragged, .rightMouseUp:
+        case .rightMouseDown:
+            // `point` arrives in the superview's coordinate system, not our own —
+            // it must be converted before comparing against node/world coordinates.
+            let local = convert(point, from: superview)
+            if isDrawingGroup || isOverNode?(local) == true { return nil }
+            return super.hitTest(point)
+        case .rightMouseDragged, .rightMouseUp:
             return super.hitTest(point)
         default:
             return nil
@@ -696,13 +750,7 @@ private class RightClickDragView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        let pt = convert(event.locationInWindow, from: nil)
-        // Defer to the responder chain for node context menus or group drawing mode.
-        if isDrawingGroup || isOverNode?(pt) == true {
-            nextResponder?.rightMouseDown(with: event)
-            return
-        }
-        startPoint = pt
+        startPoint = convert(event.locationInWindow, from: nil)
     }
 
     override func rightMouseDragged(with event: NSEvent) {
@@ -712,10 +760,7 @@ private class RightClickDragView: NSView {
     }
 
     override func rightMouseUp(with event: NSEvent) {
-        guard let start = startPoint else {
-            nextResponder?.rightMouseUp(with: event)
-            return
-        }
+        guard let start = startPoint else { return }
         let pt = convert(event.locationInWindow, from: nil)
         onDragEnded?(start, pt)
         startPoint = nil
