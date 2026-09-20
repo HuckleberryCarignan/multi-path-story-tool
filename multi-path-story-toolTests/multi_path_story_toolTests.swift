@@ -210,6 +210,35 @@ struct StoryViewModelNodeTests {
         #expect(vm.nodes.first { $0.id == a.id }!.position == .zero)
     }
 
+    @Test func finishGroupDragMovesAllSelectedNodesTogether() {
+        let vm = StoryViewModel()
+        let a = StoryNode(id: UUID(), position: CGPoint(x: 0, y: 0))
+        let b = StoryNode(id: UUID(), position: CGPoint(x: 300, y: 0))
+        let c = StoryNode(id: UUID(), position: CGPoint(x: 900, y: 900))
+        vm.nodes = [a, b, c]
+        let origins: [UUID: CGPoint] = [a.id: a.position, b.id: b.position]
+
+        vm.finishGroupDrag(ids: [a.id, b.id], by: CGSize(width: 10, height: 10), from: origins)
+
+        #expect(vm.nodes.first { $0.id == a.id }!.position == CGPoint(x: 20, y: 20))
+        #expect(vm.nodes.first { $0.id == b.id }!.position == CGPoint(x: 320, y: 20))
+        #expect(vm.nodes.first { $0.id == c.id }!.position == CGPoint(x: 900, y: 900))
+    }
+
+    @Test func finishGroupDragIsBlockedIfAnyMemberWouldOverlapANonMember() {
+        let vm = StoryViewModel()
+        let a = StoryNode(id: UUID(), position: CGPoint(x: 0, y: 0))
+        let b = StoryNode(id: UUID(), position: CGPoint(x: 300, y: 0))
+        let d = StoryNode(id: UUID(), position: CGPoint(x: 400, y: 0))
+        vm.nodes = [a, b, d]
+        let origins: [UUID: CGPoint] = [a.id: a.position, b.id: b.position]
+
+        vm.finishGroupDrag(ids: [a.id, b.id], by: CGSize(width: 110, height: 0), from: origins)
+
+        #expect(vm.nodes.first { $0.id == a.id }!.position == .zero)
+        #expect(vm.nodes.first { $0.id == b.id }!.position == CGPoint(x: 300, y: 0))
+    }
+
     @Test func updateNodeNameChangesAndIgnoresUnchangedValue() {
         let vm = StoryViewModel()
         let node = StoryNode(name: "Original", position: .zero)
