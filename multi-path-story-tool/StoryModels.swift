@@ -17,6 +17,16 @@ let pastelColors: [Color] = [
     Color(red: 0.88, green: 0.76, blue: 1.0),
 ]
 
+struct EntryCode: Identifiable, Codable, Equatable {
+    let id: UUID
+    var code: String
+    var description: String
+
+    init(id: UUID = UUID(), code: String = "", description: String = "") {
+        self.id = id; self.code = code; self.description = description
+    }
+}
+
 struct StoryNode: Identifiable, Codable, Equatable {
     let id: UUID
     var name: String
@@ -24,24 +34,27 @@ struct StoryNode: Identifiable, Codable, Equatable {
     var position: CGPoint
     var width:    CGFloat
     var height:   CGFloat
+    var codes:    [EntryCode]
 
     var shortID: String { String(id.uuidString.prefix(8)).uppercased() }
 
     // Explicit CodingKeys so the custom init(from:) can reference .width / .height
     // and encode(to:) is still auto-synthesised for all keys.
     enum CodingKeys: String, CodingKey {
-        case id, name, dialogue, position, width, height
+        case id, name, dialogue, position, width, height, codes
     }
 
     init(id: UUID = UUID(), name: String = "New Entry", dialogue: String = "",
          position: CGPoint = .zero,
-         width: CGFloat = nodeWidth, height: CGFloat = nodeHeight) {
+         width: CGFloat = nodeWidth, height: CGFloat = nodeHeight,
+         codes: [EntryCode] = []) {
         self.id = id; self.name = name; self.dialogue = dialogue
         self.position = position; self.width = width; self.height = height
+        self.codes = codes
     }
 
-    // Custom decoder: width/height default to nodeWidth/nodeHeight for old saves
-    // that were written before per-node sizing was introduced.
+    // Custom decoder: width/height default to nodeWidth/nodeHeight, and codes
+    // defaults to empty, for old saves written before these fields existed.
     init(from decoder: Decoder) throws {
         let c    = try decoder.container(keyedBy: CodingKeys.self)
         id       = try c.decode(UUID.self,    forKey: .id)
@@ -50,6 +63,7 @@ struct StoryNode: Identifiable, Codable, Equatable {
         position = try c.decode(CGPoint.self, forKey: .position)
         width    = try c.decodeIfPresent(CGFloat.self, forKey: .width)  ?? nodeWidth
         height   = try c.decodeIfPresent(CGFloat.self, forKey: .height) ?? nodeHeight
+        codes    = try c.decodeIfPresent([EntryCode].self, forKey: .codes) ?? []
     }
 
     var bottomCenter: CGPoint { CGPoint(x: position.x + width  / 2, y: position.y + height) }

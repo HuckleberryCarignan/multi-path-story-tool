@@ -118,6 +118,12 @@ struct CanvasView: View {
                 ConnectionHitLayer(vm: vm, canvasOffset: effectiveOffset, dragOffsets: nodeDragOffsets, canvasScale: canvasScale)
                     .frame(width: geo.size.width, height: geo.size.height)
 
+                // Connection lines are drawn before the node cards so the cards
+                // (and their code badges, which sit outside the card's left edge)
+                // always render on top of the lines rather than being crossed by them.
+                ConnectionLinesView(vm: vm, canvasOffset: effectiveOffset, dragOffsets: nodeDragOffsets, canvasScale: canvasScale)
+                    .frame(width: geo.size.width, height: geo.size.height)
+
                 ForEach(vm.nodes) { node in
                     let drag = nodeDragOffsets[node.id] ?? .zero
                     let s  = canvasScale
@@ -180,9 +186,6 @@ struct CanvasView: View {
                         )
                 }
 
-                ConnectionLinesView(vm: vm, canvasOffset: effectiveOffset, dragOffsets: nodeDragOffsets, canvasScale: canvasScale)
-                    .frame(width: geo.size.width, height: geo.size.height)
-
                 if vm.connectingFromNodeID != nil {
                     ConnectingBanner()
                 }
@@ -222,12 +225,18 @@ struct CanvasView: View {
                         .allowsHitTesting(false)
                 }
 
-                // Hidden buttons so ⌘C / ⌘V work while the canvas is focused
+                // Hidden buttons so ⌘C / ⌘V work while the canvas is focused. Disabled
+                // whenever the canvas isn't focused so they don't swallow ⌘C/⌘V meant
+                // for a focused text field elsewhere (e.g. Dialogue / Story, or text
+                // pasted in by a dictation tool) — a disabled button's keyboardShortcut
+                // doesn't fire, so the key event falls through to the real first responder.
                 Button("") { vm.copySelectedNodes() }
                     .keyboardShortcut("c", modifiers: .command)
+                    .disabled(!isFocused)
                     .opacity(0).allowsHitTesting(false)
                 Button("") { vm.pasteNodes() }
                     .keyboardShortcut("v", modifiers: .command)
+                    .disabled(!isFocused)
                     .opacity(0).allowsHitTesting(false)
             }
             .frame(width: geo.size.width, height: geo.size.height)

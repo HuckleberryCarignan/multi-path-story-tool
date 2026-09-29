@@ -354,7 +354,9 @@ struct ConnectionLinesView: View {
     // MARK: - Routing
 
     // Builds a bezier that departs in the exit-port direction and arrives in the
-    // entry-port direction, with obstacle avoidance for all port combinations.
+    // entry-port direction. Every candidate route is verified against every node
+    // on the canvas (not just the ones it was specifically routed around) and
+    // re-tried with a wider berth until a fully clear path is found.
     private func routedPath(rawFrom: CGPoint, rawTo: CGPoint,
                              exitPort: Port, entryPort: Port,
                              excludeIDs: Set<UUID>,
@@ -369,37 +371,53 @@ struct ConnectionLinesView: View {
         let cp2   = CGPoint(x: end.x   + entryPort.dx * curveStrength,
                             y: end.y   + entryPort.dy * curveStrength)
 
-        // Bottom→top inverted: source exit is at or below target entry.
-        if exitPort == .bottom && entryPort == .top && start.y >= end.y - buf {
-            return sideRoutedPath(start: start, end: end,
-                                  excludeIDs: excludeIDs, nodes: nodes, buf: buf)
+        // Bottom→top inverted: source exit is at or below target entry — the direct
+        // curve would double back on itself, so start from the side-wrap route.
+        let isInverted = exitPort == .bottom && entryPort == .top && start.y >= end.y - buf
+        let primary: (path: Path, approach: CGPoint) = isInverted
+            ? sideRoutedPath(start: start, end: end, excludeIDs: excludeIDs, nodes: nodes)
+            : (directPath(from: start, to: end, cp1: cp1, cp2: cp2), cp2)
+
+        if !pathCrosses(primary.path, excludeIDs: excludeIDs, nodes: nodes, buffer: buf) {
+            return primary
         }
 
-        // General obstacle avoidance for all port combinations.
-        let blockers = crossedRects(from: start, to: end, cp1: cp1, cp2: cp2,
-                                    excludeIDs: excludeIDs, nodes: nodes, buffer: buf)
-        if !blockers.isEmpty {
-            let blockRect = blockers.dropFirst().reduce(blockers[0]) { $0.union($1) }
-            return avoidBlockers(start: start, end: end,
-                                  exitPort: exitPort, entryPort: entryPort,
-                                  blockRect: blockRect)
+        // The straightforward route hit something — detour around whatever it
+        // crossed, escalating the clearance margin until nothing is left crossed.
+        let hitRects = nodes.compactMap { node -> CGRect? in
+            guard !excludeIDs.contains(node.id) else { return nil }
+            let inflated = node.rect.insetBy(dx: -buf, dy: -buf)
+            return samplePath(primary.path).contains { inflated.contains($0) } ? inflated : nil
         }
+        guard !hitRects.isEmpty else { return primary }
+        let blockRect = hitRects.dropFirst().reduce(hitRects[0]) { $0.union($1) }
 
+        if let cleared = clearedDetour(start: start, end: end,
+                                        exitPort: exitPort, entryPort: entryPort,
+                                        blockRect: blockRect, excludeIDs: excludeIDs,
+                                        nodes: nodes, buf: buf) {
+            return cleared
+        }
+        return primary  // best effort — nothing fully clear was found
+    }
+
+    private func directPath(from: CGPoint, to: CGPoint, cp1: CGPoint, cp2: CGPoint) -> Path {
         var path = Path()
-        path.move(to: start)
-        path.addCurve(to: end, control1: cp1, control2: cp2)
-        return (path, cp2)
+        path.move(to: from)
+        path.addCurve(to: to, control1: cp1, control2: cp2)
+        return path
     }
 
     // Routes around the right side of both nodes for the inverted bottom→top case.
     private func sideRoutedPath(start: CGPoint, end: CGPoint,
-                                excludeIDs: Set<UUID>, nodes: [StoryNode],
-                                buf: CGFloat) -> (path: Path, approach: CGPoint) {
+                                excludeIDs: Set<UUID>, nodes: [StoryNode]) -> (path: Path, approach: CGPoint) {
         let excluded  = nodes.filter { excludeIDs.contains($0.id) }
         let rightEdge = (excluded.map { $0.position.x + nodeWidth }.max() ?? start.x) + sideMargin
         let allRight  = (nodes.map    { $0.position.x + nodeWidth }.max() ?? start.x) + sideMargin
-        let sideX     = max(rightEdge, allRight)
+        return sideRoutedPath(start: start, end: end, sideX: max(rightEdge, allRight))
+    }
 
+    private func sideRoutedPath(start: CGPoint, end: CGPoint, sideX: CGFloat) -> (path: Path, approach: CGPoint) {
         let wp1   = CGPoint(x: sideX, y: start.y)
         let wp2   = CGPoint(x: sideX, y: end.y)
         let dy    = wp1.y - wp2.y
@@ -418,24 +436,50 @@ struct ConnectionLinesView: View {
         return (path, s3cp2)
     }
 
-    // Picks the shortest waypoint around all four sides of the blocking rect.
-    private func avoidBlockers(start: CGPoint, end: CGPoint,
+    // Tries waypoints around all four sides of the blocking rect, escalating the
+    // clearance margin, until a two-segment route avoids every node on the canvas.
+    // Falls back to a three-segment sidestep (go sideways clear of the obstacle's
+    // full column, travel down the cleared corridor, then come back in) because
+    // an obstacle sitting directly in line between start and end can't be routed
+    // around by a single bent curve — its departure/arrival tangents are locked
+    // to the port directions, so the curve hugs that line before it can bend and
+    // still clips the obstacle no matter how far out the waypoint is.
+    private func clearedDetour(start: CGPoint, end: CGPoint,
                                 exitPort: Port, entryPort: Port,
-                                blockRect: CGRect) -> (path: Path, approach: CGPoint) {
-        let margin = sideMargin
-        let midX   = (start.x + end.x) / 2
-        let midY   = (start.y + end.y) / 2
-        let candidates: [CGPoint] = [
-            CGPoint(x: midX,                    y: blockRect.minY - margin),
-            CGPoint(x: midX,                    y: blockRect.maxY + margin),
-            CGPoint(x: blockRect.minX - margin, y: midY),
-            CGPoint(x: blockRect.maxX + margin, y: midY),
-        ]
-        let wp = candidates.min(by: {
-            ptDist($0, start) + ptDist($0, end) < ptDist($1, start) + ptDist($1, end)
-        })!
-        return twoSegmentPath(start: start, end: end, waypoint: wp,
-                               exitPort: exitPort, entryPort: entryPort)
+                                blockRect: CGRect, excludeIDs: Set<UUID>,
+                                nodes: [StoryNode], buf: CGFloat) -> (path: Path, approach: CGPoint)? {
+        let midX = (start.x + end.x) / 2
+        let midY = (start.y + end.y) / 2
+        for tier in 1...4 {
+            let margin = sideMargin * CGFloat(tier)
+            let candidates: [CGPoint] = [
+                CGPoint(x: midX,                    y: blockRect.minY - margin),
+                CGPoint(x: midX,                    y: blockRect.maxY + margin),
+                CGPoint(x: blockRect.minX - margin, y: midY),
+                CGPoint(x: blockRect.maxX + margin, y: midY),
+            ].sorted {
+                ptDist($0, start) + ptDist($0, end) < ptDist($1, start) + ptDist($1, end)
+            }
+            for wp in candidates {
+                let (path, approach) = twoSegmentPath(start: start, end: end, waypoint: wp,
+                                                       exitPort: exitPort, entryPort: entryPort)
+                if !pathCrosses(path, excludeIDs: excludeIDs, nodes: nodes, buffer: buf) {
+                    return (path, approach)
+                }
+            }
+        }
+        for tier in 1...4 {
+            let margin = sideMargin * CGFloat(tier)
+            let sideXs = [blockRect.minX - margin, blockRect.maxX + margin]
+                .sorted { abs($0 - midX) < abs($1 - midX) }
+            for sideX in sideXs {
+                let (path, approach) = sideRoutedPath(start: start, end: end, sideX: sideX)
+                if !pathCrosses(path, excludeIDs: excludeIDs, nodes: nodes, buffer: buf) {
+                    return (path, approach)
+                }
+            }
+        }
+        return nil
     }
 
     // Two-segment bezier through an intermediate waypoint.
@@ -465,27 +509,15 @@ struct ConnectionLinesView: View {
 
     private func ptDist(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(b.x - a.x, b.y - a.y) }
 
-    private func crossedRects(from: CGPoint, to: CGPoint,
-                               cp1: CGPoint, cp2: CGPoint,
-                               excludeIDs: Set<UUID>,
-                               nodes: [StoryNode],
-                               buffer: CGFloat) -> [CGRect] {
-        let samples = bezierSamples(from: from, to: to, cp1: cp1, cp2: cp2)
-        return nodes.compactMap { node -> CGRect? in
-            guard !excludeIDs.contains(node.id) else { return nil }
+    // Samples the path and checks whether it passes through any node other than
+    // the connection's own source/target.
+    private func pathCrosses(_ path: Path, excludeIDs: Set<UUID>,
+                              nodes: [StoryNode], buffer: CGFloat) -> Bool {
+        let samples = samplePath(path)
+        return nodes.contains { node in
+            guard !excludeIDs.contains(node.id) else { return false }
             let inflated = node.rect.insetBy(dx: -buffer, dy: -buffer)
-            return samples.contains { inflated.contains($0) } ? inflated : nil
-        }
-    }
-
-    private func bezierSamples(from: CGPoint, to: CGPoint,
-                                cp1: CGPoint, cp2: CGPoint) -> [CGPoint] {
-        stride(from: CGFloat(0.05), through: 0.95, by: 0.05).map { t in
-            let mt = 1 - t
-            return CGPoint(
-                x: mt*mt*mt*from.x + 3*mt*mt*t*cp1.x + 3*mt*t*t*cp2.x + t*t*t*to.x,
-                y: mt*mt*mt*from.y + 3*mt*mt*t*cp1.y + 3*mt*t*t*cp2.y + t*t*t*to.y
-            )
+            return samples.contains { inflated.contains($0) }
         }
     }
 

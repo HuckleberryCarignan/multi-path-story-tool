@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 @Observable
 class StoryViewModel {
@@ -19,6 +20,8 @@ class StoryViewModel {
     var addNodeOnCommandClick: Bool = true
     var rightJustifiedOnCanvas: Bool = true
     var showZoomOut: Bool = true
+    var showEntryCodesSection: Bool = true
+    var showCanvasCodeBadge: Bool = true
     var isDialogueExpanded: Bool = false
     var groups: [StoryGroup] = [] {
         didSet { if !suppressChangeTracking { hasUnsavedChanges = true } }
@@ -220,6 +223,9 @@ class StoryViewModel {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
+        if let mpstType = UTType(filenameExtension: "mpst") {
+            panel.allowedContentTypes = [mpstType]
+        }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         loadFromDisk(url: url)
     }
@@ -254,7 +260,14 @@ class StoryViewModel {
 
     @discardableResult
     private func writeToDisk(url: URL) -> Bool {
-        let doc = StoryDocument(nodes: nodes, connections: connections, groups: groups)
+        // Blank (whitespace-only) code entries are working scratch state only —
+        // they're dropped here so the file never persists an empty code.
+        let sanitizedNodes = nodes.map { node in
+            var n = node
+            n.codes = n.codes.filter { !$0.code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            return n
+        }
+        let doc = StoryDocument(nodes: sanitizedNodes, connections: connections, groups: groups)
         guard let data = try? JSONEncoder().encode(doc) else { return false }
         do {
             try data.write(to: url, options: .atomic)
@@ -534,6 +547,27 @@ class StoryViewModel {
         let before = checkpoint()
         nodes[idx].name = name
         registerUndo(action: "Rename Entry", from: before)
+    }
+
+    // MARK: - Entry code management
+
+    let maxEntryCodes = 3
+    let maxCodeLength = 4
+
+    func addCode(to nodeID: UUID) {
+        guard let idx = nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+        guard nodes[idx].codes.count < maxEntryCodes else { return }
+        let before = checkpoint()
+        nodes[idx].codes.append(EntryCode())
+        registerUndo(action: "Add Code", from: before)
+    }
+
+    func removeCode(_ codeID: UUID, from nodeID: UUID) {
+        guard let idx = nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+        guard nodes[idx].codes.contains(where: { $0.id == codeID }) else { return }
+        let before = checkpoint()
+        nodes[idx].codes.removeAll { $0.id == codeID }
+        registerUndo(action: "Remove Code", from: before)
     }
 
     // MARK: - Group box management

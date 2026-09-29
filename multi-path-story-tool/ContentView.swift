@@ -6,16 +6,22 @@ struct ContentView: View {
     @State private var dragStartWidth: CGFloat = 280
     @State private var isDraggingDivider = false
     @State private var showingSettings = false
+    @State private var isCodeIndexCollapsed = false
     @Environment(\.undoManager) private var undoManager
     @AppStorage("appearanceMode") private var appearanceMode: String = "dark"
     @AppStorage("showTooltips") private var showTooltips: Bool = true
 
     private let minPanelWidth: CGFloat = 200
     private let maxPanelWidth: CGFloat = 500
+    private let codeIndexWidth: CGFloat = 200
+    private let codeIndexCollapsedWidth: CGFloat = 44
 
     var body: some View {
         HStack(spacing: 0) {
             if vm.rightJustifiedOnCanvas {
+                CodeIndexView(vm: vm, isCollapsed: $isCodeIndexCollapsed)
+                    .frame(width: isCodeIndexCollapsed ? codeIndexCollapsedWidth : codeIndexWidth)
+                Divider()
                 NodeDetailView(vm: vm)
                     .frame(width: detailWidth)
                 dividerHandle
@@ -25,9 +31,12 @@ struct ContentView: View {
                 dividerHandle
                 NodeDetailView(vm: vm)
                     .frame(width: detailWidth)
+                Divider()
+                CodeIndexView(vm: vm, isCollapsed: $isCodeIndexCollapsed)
+                    .frame(width: isCodeIndexCollapsed ? codeIndexCollapsedWidth : codeIndexWidth)
             }
         }
-        .frame(minWidth: 860, minHeight: 520)
+        .frame(minWidth: 1060, minHeight: 520)
         .preferredColorScheme(appearanceMode == "dark" ? .dark : .light)
         .onAppear {
             vm.undoManager = undoManager
@@ -49,6 +58,12 @@ struct ContentView: View {
                         Label("Dialogue / Story", systemImage: "text.alignleft")
                             .font(.headline)
                         Spacer()
+                        FocusPreservingIconButton(systemName: "list.bullet") {
+                            toggleBulletList(text: $vm.nodes[idx].dialogue)
+                        }
+                        .help("Toggle bullet list")
+                        .padding(.trailing, 6)
+
                         Button {
                             vm.isDialogueExpanded = false
                         } label: {

@@ -38,6 +38,11 @@ struct SettingsView: View {
                     Toggle("Left/Right Justified on Canvas", isOn: $vm.rightJustifiedOnCanvas)
                 }
 
+                Section("Codes") {
+                    Toggle("Story Entry", isOn: $vm.showEntryCodesSection)
+                    Toggle("Story Canvas", isOn: $vm.showCanvasCodeBadge)
+                }
+
                 Section("Appearance") {
                     Picker("Mode", selection: $appearanceMode) {
                         Text("Dark").tag("dark")

@@ -14,12 +14,8 @@ struct StoryNodeView: View {
     private var isTarget:      Bool { vm.connectingFromNodeID != nil && !isSource }
     private var isStartEntry:  Bool { vm.startNodeID == node.id }
 
-    private var textAlignment: TextAlignment {
-        vm.rightJustifiedOnCanvas ? .trailing : .leading
-    }
-    private var stackAlignment: HorizontalAlignment {
-        vm.rightJustifiedOnCanvas ? .trailing : .leading
-    }
+    private var textAlignment: TextAlignment { .center }
+    private var stackAlignment: HorizontalAlignment { .center }
 
     var body: some View {
         VStack(alignment: stackAlignment, spacing: 3) {
@@ -66,6 +62,11 @@ struct StoryNodeView: View {
                     .foregroundStyle(.green)
                     .offset(x: -6, y: -6)
                     .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 1)
+            }
+        }
+        .overlay(alignment: .leading) {
+            if vm.showCanvasCodeBadge && !node.codes.isEmpty {
+                codeBadge
             }
         }
         .contentShape(Rectangle())
@@ -124,6 +125,34 @@ struct StoryNodeView: View {
 
     private var borderWidth: CGFloat { isSelected || isSource ? 2.5 : 1 }
 
+    // Width sized for 4 monospaced characters plus horizontal padding.
+    private var codeBadgeWidth: CGFloat { 38 }
+
+    private var codeBadge: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(node.codes) { entry in
+                Text(entry.code)
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .lineLimit(1)
+            }
+        }
+        .frame(width: codeBadgeWidth, height: nodeHeight - 12, alignment: .topLeading)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(borderColor, lineWidth: borderWidth)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        // Shifted left so only ~20% of the badge overlaps the entry box;
+        // the rest sticks out past its leading edge like a tab.
+        .offset(x: -codeBadgeWidth * 0.8)
+        .allowsHitTesting(false)
+    }
+
     @ViewBuilder
     private var contextMenuContent: some View {
         if let fromID = vm.connectingFromNodeID {
@@ -169,3 +198,4 @@ struct StoryNodeView: View {
         }
     }
 }
+
