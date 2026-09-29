@@ -69,8 +69,8 @@ struct CodeIndexView: View {
             .buttonStyle(.borderless)
             .help(sortAscending ? "Sorted A to Z — click for Z to A" : "Sorted Z to A — click for A to Z")
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, minHeight: panelHeaderHeight, maxHeight: panelHeaderHeight, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor))
     }
 

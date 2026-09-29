@@ -10,6 +10,8 @@ import os
 
 @main
 struct multi_path_story_toolApp: App {
+    @State private var vm = StoryViewModel()
+
     init() {
         Logger().log("DEBUG_APP_LAUNCHED")
         // Reduce the system tooltip appearance delay from ~1 s to 300 ms app-wide.
@@ -18,7 +20,18 @@ struct multi_path_story_toolApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(vm: vm)
+        }
+        .commands {
+            // Registered here (rather than only as a button inside the toolbar's
+            // File Menu) so ⌘O is a real app menu command and reliably fires
+            // from the moment the app launches.
+            CommandGroup(after: .newItem) {
+                Button("Open Story...") {
+                    vm.openDocument()
+                }
+                .keyboardShortcut("o", modifiers: .command)
+            }
         }
     }
 }

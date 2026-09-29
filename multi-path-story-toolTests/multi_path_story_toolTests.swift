@@ -58,6 +58,51 @@ struct StoryNodeTests {
         #expect(decoded.height == nodeHeight)
         #expect(decoded.name == "Old")
     }
+
+    @Test func defaultInitHasNoCodes() {
+        let node = StoryNode()
+        #expect(node.codes.isEmpty)
+    }
+
+    @Test func codableRoundTripPreservesCodes() throws {
+        let original = StoryNode(name: "Hello", codes: [
+            EntryCode(code: "AB12", description: "Has the key"),
+            EntryCode(code: "X", description: "Short one"),
+        ])
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(StoryNode.self, from: data)
+        #expect(decoded == original)
+        #expect(decoded.codes.count == 2)
+    }
+
+    @Test func decodingMissingCodesUsesEmptyDefault() throws {
+        let id = UUID()
+        let json = """
+        {"id":"\(id.uuidString)","name":"Old","dialogue":"","position":[1,2]}
+        """
+        let decoded = try JSONDecoder().decode(StoryNode.self, from: Data(json.utf8))
+        #expect(decoded.codes.isEmpty)
+    }
+}
+
+// MARK: - EntryCode
+
+@MainActor
+@Suite("EntryCode")
+struct EntryCodeTests {
+
+    @Test func defaultInitValues() {
+        let code = EntryCode()
+        #expect(code.code == "")
+        #expect(code.description == "")
+    }
+
+    @Test func codableRoundTrip() throws {
+        let original = EntryCode(code: "AB12", description: "Player has the key")
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(EntryCode.self, from: data)
+        #expect(decoded == original)
+    }
 }
 
 // MARK: - StoryGroup
@@ -249,6 +294,90 @@ struct StoryViewModelNodeTests {
 
         vm.updateNodeName(node.id, "Renamed")
         #expect(vm.nodes[0].name == "Renamed")
+    }
+}
+
+// MARK: - StoryViewModel: Entry codes
+
+@MainActor
+@Suite("StoryViewModel entry codes")
+struct StoryViewModelEntryCodeTests {
+
+    @Test func addCodeAppendsBlankEntryToTheRightNode() {
+        let vm = StoryViewModel()
+        let a = StoryNode(position: .zero)
+        let b = StoryNode(position: CGPoint(x: 300, y: 0))
+        vm.nodes = [a, b]
+
+        vm.addCode(to: a.id)
+
+        #expect(vm.nodes.first { $0.id == a.id }!.codes.count == 1)
+        #expect(vm.nodes.first { $0.id == b.id }!.codes.isEmpty)
+        #expect(vm.nodes.first { $0.id == a.id }!.codes[0].code == "")
+    }
+
+    @Test func addCodeIsNoOpForNonexistentNode() {
+        let vm = StoryViewModel()
+        vm.nodes = [StoryNode(position: .zero)]
+        vm.addCode(to: UUID())
+        #expect(vm.nodes[0].codes.isEmpty)
+    }
+
+    @Test func addCodeStopsAtMaxEntryCodes() {
+        let vm = StoryViewModel()
+        let node = StoryNode(position: .zero)
+        vm.nodes = [node]
+
+        for _ in 0..<(vm.maxEntryCodes + 2) {
+            vm.addCode(to: node.id)
+        }
+
+        #expect(vm.nodes[0].codes.count == vm.maxEntryCodes)
+    }
+
+    @Test func removeCodeDeletesOnlyTheMatchingEntry() {
+        let vm = StoryViewModel()
+        var node = StoryNode(position: .zero)
+        node.codes = [EntryCode(code: "AB12"), EntryCode(code: "X")]
+        vm.nodes = [node]
+        let keepID = node.codes[1].id
+
+        vm.removeCode(node.codes[0].id, from: node.id)
+
+        #expect(vm.nodes[0].codes.count == 1)
+        #expect(vm.nodes[0].codes[0].id == keepID)
+    }
+
+    @Test func removeCodeIsNoOpForNonexistentCodeOrNode() {
+        let vm = StoryViewModel()
+        var node = StoryNode(position: .zero)
+        node.codes = [EntryCode(code: "AB12")]
+        vm.nodes = [node]
+
+        vm.removeCode(UUID(), from: node.id)
+        #expect(vm.nodes[0].codes.count == 1)
+
+        vm.removeCode(node.codes[0].id, from: UUID())
+        #expect(vm.nodes[0].codes.count == 1)
+    }
+
+    @Test func undoAndRedoRestoreRemovedCode() {
+        let vm = StoryViewModel()
+        let undoManager = UndoManager()
+        vm.undoManager = undoManager
+        var node = StoryNode(position: .zero)
+        node.codes = [EntryCode(code: "AB12")]
+        vm.nodes = [node]
+        let codeID = node.codes[0].id
+
+        vm.removeCode(codeID, from: node.id)
+        #expect(vm.nodes[0].codes.isEmpty)
+
+        undoManager.undo()
+        #expect(vm.nodes[0].codes.map(\.id) == [codeID])
+
+        undoManager.redo()
+        #expect(vm.nodes[0].codes.isEmpty)
     }
 }
 

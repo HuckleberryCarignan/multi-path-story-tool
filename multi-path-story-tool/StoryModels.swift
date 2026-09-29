@@ -6,6 +6,11 @@ let nodeHeight:   CGFloat = 64
 let snapGridSize: CGFloat = 20
 let curveStrength: CGFloat = 90
 
+// Shared fixed height for the Story Canvas / Story Entry / Code Word List
+// panel headers, so their divider lines all line up at the same height
+// regardless of each header's own content (stat widgets, buttons, etc.).
+let panelHeaderHeight: CGFloat = 48
+
 let pastelColors: [Color] = [
     Color(red: 1.0,  green: 0.78, blue: 0.80),
     Color(red: 0.80, green: 0.95, blue: 0.80),

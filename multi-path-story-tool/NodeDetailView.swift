@@ -10,8 +10,8 @@ struct NodeDetailView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Story Entry")
                     .font(.headline)
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, minHeight: panelHeaderHeight, maxHeight: panelHeaderHeight, alignment: .leading)
                     .background(appearanceMode == "color"
                         ? Color(red: 0.82, green: 0.93, blue: 1.0)
                         : Color(nsColor: .controlBackgroundColor))

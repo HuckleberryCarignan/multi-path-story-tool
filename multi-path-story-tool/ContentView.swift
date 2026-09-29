@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var vm = StoryViewModel()
+    @Bindable var vm: StoryViewModel
     @State private var detailWidth: CGFloat = 280
     @State private var dragStartWidth: CGFloat = 280
     @State private var isDraggingDivider = false
@@ -96,10 +96,13 @@ struct ContentView: View {
                     }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
 
+                    // ⌘O is registered as a real app menu command (see
+                    // multi_path_story_toolApp.swift) instead of here, since
+                    // SwiftUI doesn't reliably wire up keyboard shortcuts on
+                    // buttons nested inside a toolbar Menu at launch.
                     Button { vm.openDocument() } label: {
                         Label("Open Story", systemImage: "folder")
                     }
-                    .keyboardShortcut("o", modifiers: .command)
 
                     Divider()
 
@@ -203,8 +206,7 @@ struct ContentView: View {
                 canvasStat(count: vm.connections.filter { !$0.isOrphaned }.count, label: "Decisions")
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, minHeight: panelHeaderHeight, maxHeight: panelHeaderHeight)
             .background(appearanceMode == "color"
                 ? Color(red: 1.00, green: 0.84, blue: 0.88)
                 : Color(nsColor: .controlBackgroundColor))
@@ -266,5 +268,5 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(vm: StoryViewModel())
 }
