@@ -11,14 +11,23 @@ struct CodeIndexView: View {
 
     @State private var sortAscending = true
     @State private var crossedOutCodes: Set<String> = []
+    @State private var tooltipCode: String?
+    @State private var hoverTask: Task<Void, Never>?
 
-    private var sortedCodes: [String] {
-        let unique = Set(
-            vm.nodes.flatMap { $0.codes.map { $0.code } }
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-        )
-        return sortAscending ? unique.sorted() : unique.sorted(by: >)
+    private var sortedCodes: [(code: String, description: String)] {
+        var descriptionsByCode: [String: String] = [:]
+        for entryCode in vm.nodes.flatMap({ $0.codes }) {
+            let code = entryCode.code.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !code.isEmpty else { continue }
+            let description = entryCode.description.trimmingCharacters(in: .whitespacesAndNewlines)
+            if descriptionsByCode[code] == nil || descriptionsByCode[code]?.isEmpty == true {
+                descriptionsByCode[code] = description
+            }
+        }
+        let entries = descriptionsByCode.map { (code: $0.key, description: $0.value) }
+        return sortAscending
+            ? entries.sorted { $0.code < $1.code }
+            : entries.sorted { $0.code > $1.code }
     }
 
     var body: some View {
@@ -35,8 +44,8 @@ struct CodeIndexView: View {
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 2) {
-                            ForEach(sortedCodes, id: \.self) { code in
-                                codeRow(code)
+                            ForEach(sortedCodes, id: \.code) { entry in
+                                codeRow(entry)
                             }
                         }
                         .padding(.vertical, 8)
@@ -98,19 +107,50 @@ struct CodeIndexView: View {
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
-    private func codeRow(_ code: String) -> some View {
-        let isCrossedOut = crossedOutCodes.contains(code)
-        return Text(code)
-            .font(.system(.body, design: .monospaced))
-            .strikethrough(isCrossedOut)
-            .foregroundStyle(isCrossedOut ? .secondary : .primary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if isCrossedOut { crossedOutCodes.remove(code) } else { crossedOutCodes.insert(code) }
+    private func truncatedDescription(_ description: String) -> String {
+        guard description.count > 15 else { return description }
+        return description.prefix(15) + "..."
+    }
+
+    private func codeRow(_ entry: (code: String, description: String)) -> some View {
+        let isCrossedOut = crossedOutCodes.contains(entry.code)
+        return HStack(spacing: 0) {
+            Text(entry.code)
+                .font(.system(.body, design: .monospaced))
+            if !entry.description.isEmpty {
+                Text(" - \(truncatedDescription(entry.description))")
+                    .font(.body)
             }
+        }
+        .strikethrough(isCrossedOut)
+        .foregroundStyle(isCrossedOut ? .secondary : .primary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if isCrossedOut { crossedOutCodes.remove(entry.code) } else { crossedOutCodes.insert(entry.code) }
+        }
+        .onHover { hovering in
+            hoverTask?.cancel()
+            if hovering && !entry.description.isEmpty {
+                hoverTask = Task {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    if !Task.isCancelled {
+                        tooltipCode = entry.code
+                    }
+                }
+            } else {
+                tooltipCode = nil
+            }
+        }
+        .popover(isPresented: Binding(
+            get: { tooltipCode == entry.code },
+            set: { isPresented in if !isPresented { tooltipCode = nil } }
+        )) {
+            Text(entry.description)
+                .padding()
+        }
     }
 
     private var emptyState: some View {

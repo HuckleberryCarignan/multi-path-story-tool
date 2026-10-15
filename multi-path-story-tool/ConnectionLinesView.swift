@@ -58,6 +58,34 @@ private struct ConnPathData {
     let approach: CGPoint
     let tip: CGPoint
     let samples: [CGPoint]
+    // Set when this connection has a reverse partner (B→A alongside A→B) so a
+    // second arrowhead is drawn at the start of the line, pointing back into
+    // the source node, instead of rendering the reverse edge as its own line.
+    let reverseTip: CGPoint?
+    let reverseApproach: CGPoint?
+}
+
+// Pairs up A→B with its reverse B→A (when both exist and neither is orphaned)
+// so the two render as a single line with arrows at both ends rather than two
+// overlapping, independently-routed lines. Each connection appears exactly
+// once: either as a lone primary, or as a (primary, reverse) pair.
+private func primaryConnections(_ connections: [NodeConnection]) -> [(primary: NodeConnection, reverse: NodeConnection?)] {
+    var consumed: Set<UUID> = []
+    var result: [(primary: NodeConnection, reverse: NodeConnection?)] = []
+    for conn in connections {
+        if consumed.contains(conn.id) { continue }
+        guard !conn.isOrphaned else { result.append((conn, nil)); continue }
+        if let rev = connections.first(where: {
+            !$0.isOrphaned && $0.id != conn.id &&
+            $0.fromNodeID == conn.toNodeID && $0.toNodeID == conn.fromNodeID
+        }) {
+            consumed.insert(rev.id)
+            result.append((conn, rev))
+        } else {
+            result.append((conn, nil))
+        }
+    }
+    return result
 }
 
 // Assigns each connection its (exitPort, entryPort) pair.
@@ -153,7 +181,7 @@ struct ConnectionLinesView: View {
             Canvas { ctx, _ in
                 // Phase 1: build all routed paths and sample them for crossing detection
                 var allPaths: [ConnPathData] = []
-                for conn in connections {
+                for (conn, reverse) in primaryConnections(connections) {
                     guard let pa = assignments[conn.id] else { continue }
                     let excludeIDs: Set<UUID> = [conn.fromNodeID, conn.toNodeID]
                     let (canvasPath, canvasApproach) = routedPath(
@@ -166,13 +194,26 @@ struct ConnectionLinesView: View {
                                           y: pa.to.y + pa.entryPort.dy * routingBuffer)
                     let tip      = tipWorld.applying(xform)
                     let approach = canvasApproach.applying(xform)
-                    let isSelected = selectedID == conn.id
+                    let isSelected = selectedID == conn.id || (reverse != nil && selectedID == reverse!.id)
                     let color: Color = conn.isOrphaned
                         ? .red
                         : pastelColors[conn.colorIndex % pastelColors.count]
+
+                    var reverseTip: CGPoint? = nil
+                    var reverseApproach: CGPoint? = nil
+                    if reverse != nil {
+                        let fromTipWorld = CGPoint(x: pa.from.x + pa.exitPort.dx * routingBuffer,
+                                                   y: pa.from.y + pa.exitPort.dy * routingBuffer)
+                        let fromApproachWorld = CGPoint(x: fromTipWorld.x + pa.exitPort.dx * curveStrength,
+                                                        y: fromTipWorld.y + pa.exitPort.dy * curveStrength)
+                        reverseTip      = fromTipWorld.applying(xform)
+                        reverseApproach = fromApproachWorld.applying(xform)
+                    }
+
                     allPaths.append(ConnPathData(
                         path: path, color: color, isSelected: isSelected,
-                        approach: approach, tip: tip, samples: samplePath(path)
+                        approach: approach, tip: tip, samples: samplePath(path),
+                        reverseTip: reverseTip, reverseApproach: reverseApproach
                     ))
                 }
 
@@ -200,6 +241,9 @@ struct ConnectionLinesView: View {
                     ctx.stroke(pd.path, with: .color(pd.color),
                                style: StrokeStyle(lineWidth: pd.isSelected ? 3.5 : 2.5, lineCap: .round))
                     drawArrowHead(ctx: ctx, tip: pd.tip, approach: pd.approach, color: pd.color)
+                    if let reverseTip = pd.reverseTip, let reverseApproach = pd.reverseApproach {
+                        drawArrowHead(ctx: ctx, tip: reverseTip, approach: reverseApproach, color: pd.color)
+                    }
 
                     if let gaps = underGaps[i] {
                         let r = bridgeRadius
@@ -555,9 +599,9 @@ struct ConnectionHitLayer: View {
             connections: connections, nodes: nodes,
             dragOffsets: dragOffsets, canvasScale: canvasScale
         )
-        ForEach(connections) { conn in
-            if let pa = assignments[conn.id] {
-                ConnectionHitPath(conn: conn, portAssignment: pa,
+        ForEach(primaryConnections(connections), id: \.primary.id) { pair in
+            if let pa = assignments[pair.primary.id] {
+                ConnectionHitPath(conn: pair.primary, portAssignment: pa,
                                   canvasOffset: canvasOffset, canvasScale: canvasScale, vm: vm)
             }
         }
