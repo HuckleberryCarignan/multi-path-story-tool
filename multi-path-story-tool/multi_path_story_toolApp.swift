@@ -32,6 +32,10 @@ struct multi_path_story_toolApp: App {
                 }
                 .keyboardShortcut("o", modifiers: .command)
             }
+            // Adds the system Format menu (Bold, Italic, Underline, ...) with
+            // ⌘B / ⌘I, wired automatically to whichever rich-text TextEditor
+            // (Dialogue / Story) currently has focus.
+            TextFormattingCommands()
         }
     }
 }

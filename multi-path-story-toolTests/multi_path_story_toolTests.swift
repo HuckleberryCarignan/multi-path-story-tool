@@ -83,6 +83,29 @@ struct StoryNodeTests {
         let decoded = try JSONDecoder().decode(StoryNode.self, from: Data(json.utf8))
         #expect(decoded.codes.isEmpty)
     }
+
+    @Test func codableRoundTripPreservesBoldFormatting() throws {
+        var text = AttributedString("Bold word")
+        let range = text.range(of: "Bold")!
+        text[range].inlinePresentationIntent = .stronglyEmphasized
+
+        let original = StoryNode(name: "Styled", dialogue: text)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(StoryNode.self, from: data)
+
+        #expect(String(decoded.dialogue.characters) == "Bold word")
+        let decodedRange = decoded.dialogue.range(of: "Bold")!
+        #expect(decoded.dialogue[decodedRange].inlinePresentationIntent == .stronglyEmphasized)
+    }
+
+    @Test func decodingLegacyPlainStringDialogueFallsBackToPlainText() throws {
+        let id = UUID()
+        let json = """
+        {"id":"\(id.uuidString)","name":"Old","dialogue":"Legacy plain text","position":[1,2]}
+        """
+        let decoded = try JSONDecoder().decode(StoryNode.self, from: Data(json.utf8))
+        #expect(String(decoded.dialogue.characters) == "Legacy plain text")
+    }
 }
 
 // MARK: - EntryCode

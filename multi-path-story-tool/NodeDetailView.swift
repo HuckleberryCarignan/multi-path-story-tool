@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 
 struct NodeDetailView: View {
     @Bindable var vm: StoryViewModel
@@ -273,7 +274,7 @@ struct NodeDetailView: View {
         if let textView = NSApp.keyWindow?.firstResponder as? NSTextView {
             textView.insertText(link, replacementRange: textView.selectedRange())
         } else if let idx = vm.nodes.firstIndex(where: { $0.id == vm.selectedNodeID }) {
-            vm.nodes[idx].dialogue += link
+            vm.nodes[idx].dialogue.append(AttributedString(link))
         }
     }
 
@@ -371,9 +372,10 @@ struct FocusPreservingIconButton: View {
 // selection in the focused NSTextView (mirrors insertDialogueLink's approach
 // above). Falls back to appending a bullet directly to `text` if no text
 // view is focused.
-func toggleBulletList(text: Binding<String>) {
+func toggleBulletList(text: Binding<AttributedString>) {
     guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView else {
-        text.wrappedValue += (text.wrappedValue.isEmpty ? "" : "\n") + "• "
+        let prefix = text.wrappedValue.characters.isEmpty ? "" : "\n"
+        text.wrappedValue.append(AttributedString(prefix + "• "))
         return
     }
 

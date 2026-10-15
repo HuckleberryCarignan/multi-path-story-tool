@@ -35,7 +35,7 @@ struct EntryCode: Identifiable, Codable, Equatable {
 struct StoryNode: Identifiable, Codable, Equatable {
     let id: UUID
     var name: String
-    var dialogue: String
+    var dialogue: AttributedString
     var position: CGPoint
     var width:    CGFloat
     var height:   CGFloat
@@ -49,7 +49,7 @@ struct StoryNode: Identifiable, Codable, Equatable {
         case id, name, dialogue, position, width, height, codes
     }
 
-    init(id: UUID = UUID(), name: String = "New Entry", dialogue: String = "",
+    init(id: UUID = UUID(), name: String = "New Entry", dialogue: AttributedString = AttributedString(),
          position: CGPoint = .zero,
          width: CGFloat = nodeWidth, height: CGFloat = nodeHeight,
          codes: [EntryCode] = []) {
@@ -60,11 +60,17 @@ struct StoryNode: Identifiable, Codable, Equatable {
 
     // Custom decoder: width/height default to nodeWidth/nodeHeight, and codes
     // defaults to empty, for old saves written before these fields existed.
+    // dialogue tries the rich-text (AttributedString) shape first and falls
+    // back to plain String for saves written before bold/italic support.
     init(from decoder: Decoder) throws {
         let c    = try decoder.container(keyedBy: CodingKeys.self)
         id       = try c.decode(UUID.self,    forKey: .id)
         name     = try c.decode(String.self,  forKey: .name)
-        dialogue = try c.decode(String.self,  forKey: .dialogue)
+        if let attributed = try? c.decode(AttributedString.self, forKey: .dialogue) {
+            dialogue = attributed
+        } else {
+            dialogue = AttributedString(try c.decode(String.self, forKey: .dialogue))
+        }
         position = try c.decode(CGPoint.self, forKey: .position)
         width    = try c.decodeIfPresent(CGFloat.self, forKey: .width)  ?? nodeWidth
         height   = try c.decodeIfPresent(CGFloat.self, forKey: .height) ?? nodeHeight

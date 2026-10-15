@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 import UniformTypeIdentifiers
 
 @Observable
@@ -162,10 +163,12 @@ class StoryViewModel {
                 bar,
                 "",
             ]
-            if node.dialogue.isEmpty {
+            if node.dialogue.characters.isEmpty {
                 lines.append("(no dialogue)")
             } else {
-                lines.append(replaceIDReferences(in: node.dialogue, using: idMap))
+                // Export is plain text, so rich formatting (bold/italic) is
+                // intentionally dropped here — only the raw characters carry over.
+                lines.append(replaceIDReferences(in: String(node.dialogue.characters), using: idMap))
             }
             lines += ["", ""]
         }
