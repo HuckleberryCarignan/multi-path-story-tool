@@ -52,6 +52,7 @@ private struct PortAssignment {
 }
 
 private struct ConnPathData {
+    let id: UUID
     let path: Path
     let color: Color
     let isSelected: Bool
@@ -69,7 +70,7 @@ private struct ConnPathData {
 // so the two render as a single line with arrows at both ends rather than two
 // overlapping, independently-routed lines. Each connection appears exactly
 // once: either as a lone primary, or as a (primary, reverse) pair.
-private func primaryConnections(_ connections: [NodeConnection]) -> [(primary: NodeConnection, reverse: NodeConnection?)] {
+func primaryConnections(_ connections: [NodeConnection]) -> [(primary: NodeConnection, reverse: NodeConnection?)] {
     var consumed: Set<UUID> = []
     var result: [(primary: NodeConnection, reverse: NodeConnection?)] = []
     for conn in connections {
@@ -177,61 +178,30 @@ struct ConnectionLinesView: View {
         let xform = CGAffineTransform(a: scale, b: 0, c: 0, d: scale,
                                       tx: offset.width, ty: offset.height)
 
+        // Routed once per connection so the canvas drawing, crossing detection,
+        // and the code-word label all agree on exactly the same curve — and so
+        // the (expensive) routing pass doesn't run twice per frame.
+        let pathData = buildPathData(connections: connections, nodes: nodes,
+                                      assignments: assignments, selectedID: selectedID,
+                                      xform: xform)
+
         ZStack {
             Canvas { ctx, _ in
-                // Phase 1: build all routed paths and sample them for crossing detection
-                var allPaths: [ConnPathData] = []
-                for (conn, reverse) in primaryConnections(connections) {
-                    guard let pa = assignments[conn.id] else { continue }
-                    let excludeIDs: Set<UUID> = [conn.fromNodeID, conn.toNodeID]
-                    let (canvasPath, canvasApproach) = routedPath(
-                        rawFrom: pa.from, rawTo: pa.to,
-                        exitPort: pa.exitPort, entryPort: pa.entryPort,
-                        excludeIDs: excludeIDs, nodes: nodes
-                    )
-                    let path = canvasPath.applying(xform)
-                    let tipWorld = CGPoint(x: pa.to.x + pa.entryPort.dx * routingBuffer,
-                                          y: pa.to.y + pa.entryPort.dy * routingBuffer)
-                    let tip      = tipWorld.applying(xform)
-                    let approach = canvasApproach.applying(xform)
-                    let isSelected = selectedID == conn.id || (reverse != nil && selectedID == reverse!.id)
-                    let color: Color = conn.isOrphaned
-                        ? .red
-                        : pastelColors[conn.colorIndex % pastelColors.count]
-
-                    var reverseTip: CGPoint? = nil
-                    var reverseApproach: CGPoint? = nil
-                    if reverse != nil {
-                        let fromTipWorld = CGPoint(x: pa.from.x + pa.exitPort.dx * routingBuffer,
-                                                   y: pa.from.y + pa.exitPort.dy * routingBuffer)
-                        let fromApproachWorld = CGPoint(x: fromTipWorld.x + pa.exitPort.dx * curveStrength,
-                                                        y: fromTipWorld.y + pa.exitPort.dy * curveStrength)
-                        reverseTip      = fromTipWorld.applying(xform)
-                        reverseApproach = fromApproachWorld.applying(xform)
-                    }
-
-                    allPaths.append(ConnPathData(
-                        path: path, color: color, isSelected: isSelected,
-                        approach: approach, tip: tip, samples: samplePath(path),
-                        reverseTip: reverseTip, reverseApproach: reverseApproach
-                    ))
-                }
-
-                // Phase 2: find crossings — record gap centres for the "under" path
+                // Phase 1: find crossings — record gap centres for the "under" path
                 var underGaps: [Int: [CGPoint]] = [:]
-                if allPaths.count >= 2 {
-                    for i in 0..<allPaths.count {
-                        for j in (i + 1)..<allPaths.count {
-                            for pt in findIntersections(allPaths[i].samples, allPaths[j].samples) {
+                if pathData.count >= 2 {
+                    for i in 0..<pathData.count {
+                        for j in (i + 1)..<pathData.count {
+                            for pt in findIntersections(pathData[i].samples, pathData[j].samples) {
                                 underGaps[i, default: []].append(pt)
                             }
                         }
                     }
                 }
 
-                // Phase 3: draw each path; stamp bridge knockouts where it goes "under"
+                // Phase 2: draw each path; stamp bridge knockouts where it goes "under"
                 let bgColor = Color(nsColor: .windowBackgroundColor)
-                for (i, pd) in allPaths.enumerated() {
+                for (i, pd) in pathData.enumerated() {
                     if pd.isSelected {
                         ctx.stroke(pd.path, with: .color(.white.opacity(0.9)),
                                    style: StrokeStyle(lineWidth: 10, lineCap: .round))
@@ -263,7 +233,78 @@ struct ConnectionLinesView: View {
             endpointHandles(connections: connections, nodes: nodes,
                             assignments: assignments, selectedID: selectedID,
                             offset: offset, scale: scale)
+
+            // Editable code-word box, centred halfway along each line.
+            codeLabels(pathData: pathData, selectedID: selectedID)
         }
+    }
+
+    // Builds the routed, screen-space path (plus everything derived from it)
+    // for every primary connection exactly once per render pass.
+    private func buildPathData(
+        connections: [NodeConnection], nodes: [StoryNode],
+        assignments: [UUID: PortAssignment], selectedID: UUID?, xform: CGAffineTransform
+    ) -> [ConnPathData] {
+        var allPaths: [ConnPathData] = []
+        for (conn, reverse) in primaryConnections(connections) {
+            guard let pa = assignments[conn.id] else { continue }
+            let excludeIDs: Set<UUID> = [conn.fromNodeID, conn.toNodeID]
+            let (canvasPath, canvasApproach) = routedPath(
+                rawFrom: pa.from, rawTo: pa.to,
+                exitPort: pa.exitPort, entryPort: pa.entryPort,
+                excludeIDs: excludeIDs, nodes: nodes
+            )
+            let path = canvasPath.applying(xform)
+            let tipWorld = CGPoint(x: pa.to.x + pa.entryPort.dx * routingBuffer,
+                                  y: pa.to.y + pa.entryPort.dy * routingBuffer)
+            let tip      = tipWorld.applying(xform)
+            let approach = canvasApproach.applying(xform)
+            let isSelected = selectedID == conn.id || (reverse != nil && selectedID == reverse!.id)
+            let color: Color = conn.isOrphaned
+                ? .red
+                : pastelColors[conn.colorIndex % pastelColors.count]
+
+            var reverseTip: CGPoint? = nil
+            var reverseApproach: CGPoint? = nil
+            if reverse != nil {
+                let fromTipWorld = CGPoint(x: pa.from.x + pa.exitPort.dx * routingBuffer,
+                                           y: pa.from.y + pa.exitPort.dy * routingBuffer)
+                let fromApproachWorld = CGPoint(x: fromTipWorld.x + pa.exitPort.dx * curveStrength,
+                                                y: fromTipWorld.y + pa.exitPort.dy * curveStrength)
+                reverseTip      = fromTipWorld.applying(xform)
+                reverseApproach = fromApproachWorld.applying(xform)
+            }
+
+            allPaths.append(ConnPathData(
+                id: conn.id, path: path, color: color, isSelected: isSelected,
+                approach: approach, tip: tip, samples: samplePath(path),
+                reverseTip: reverseTip, reverseApproach: reverseApproach
+            ))
+        }
+        return allPaths
+    }
+
+    // MARK: - Code-word labels
+
+    @ViewBuilder
+    private func codeLabels(pathData: [ConnPathData], selectedID: UUID?) -> some View {
+        ForEach(pathData, id: \.id) { pd in
+            ConnectionCodeBox(
+                code: codeBinding(for: pd.id),
+                midpoint: pd.samples[pd.samples.count / 2],
+                isSelected: selectedID == pd.id
+            )
+        }
+    }
+
+    private func codeBinding(for connectionID: UUID) -> Binding<String> {
+        Binding(
+            get: { vm.connections.first(where: { $0.id == connectionID })?.code ?? "" },
+            set: { newValue in
+                guard let idx = vm.connections.firstIndex(where: { $0.id == connectionID }) else { return }
+                vm.connections[idx].code = newValue
+            }
+        )
     }
 
     // MARK: - Endpoint handles
@@ -676,6 +717,42 @@ private struct ConnectionHitPath: View {
                     vm.setConnectionExitPort(conn.id, port: nil)
                 }
             }
+        }
+    }
+}
+
+// Shown once a connection is selected or already carries a code; stays on
+// screen while non-empty so the code stays readable without clicking back
+// into the line.
+private struct ConnectionCodeBox: View {
+    @Binding var code: String
+    let midpoint: CGPoint
+    let isSelected: Bool
+
+    @FocusState private var isFocused: Bool
+
+    private var isVisible: Bool { !code.isEmpty || isSelected || isFocused }
+
+    var body: some View {
+        if isVisible {
+            TextField("Code", text: $code)
+                .textFieldStyle(.plain)
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .multilineTextAlignment(.center)
+                .focused($isFocused)
+                .fixedSize()
+                .frame(minWidth: 26)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(Color(nsColor: .windowBackgroundColor))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                )
+                .position(midpoint)
         }
     }
 }

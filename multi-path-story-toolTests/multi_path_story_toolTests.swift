@@ -8,6 +8,7 @@
 import Testing
 import Foundation
 import CoreGraphics
+import SwiftUI
 @testable import multi_path_story_tool
 
 // MARK: - StoryNode
@@ -174,6 +175,24 @@ struct NodeConnectionTests {
         #expect(conn.isOrphaned == false)
         #expect(conn.entryPortOverride == nil)
         #expect(conn.exitPortOverride == nil)
+        #expect(conn.code == "")
+    }
+
+    @Test func codableRoundTripPreservesCode() throws {
+        var original = NodeConnection(fromNodeID: UUID(), toNodeID: UUID())
+        original.code = "KEY"
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(NodeConnection.self, from: data)
+        #expect(decoded == original)
+    }
+
+    @Test func decodingLegacySaveWithoutCodeDefaultsToEmpty() throws {
+        let id = UUID(), from = UUID(), to = UUID()
+        let json = """
+        {"id":"\(id.uuidString)","fromNodeID":"\(from.uuidString)","toNodeID":"\(to.uuidString)","isOrphaned":false,"colorIndex":0}
+        """
+        let decoded = try JSONDecoder().decode(NodeConnection.self, from: Data(json.utf8))
+        #expect(decoded.code == "")
     }
 }
 
@@ -683,5 +702,159 @@ struct StoryViewModelDocumentTests {
 
         undoManager.redo()
         #expect(vm.nodes.count == 1)
+    }
+}
+
+// MARK: - primaryConnections (bidirectional pairing)
+
+@Suite("primaryConnections")
+struct PrimaryConnectionsTests {
+
+    @Test func lonelyConnectionHasNoReverse() {
+        let a = UUID(), b = UUID()
+        let conn = NodeConnection(fromNodeID: a, toNodeID: b)
+
+        let pairs = primaryConnections([conn])
+
+        #expect(pairs.count == 1)
+        #expect(pairs[0].primary.id == conn.id)
+        #expect(pairs[0].reverse == nil)
+    }
+
+    @Test func mutualConnectionsCollapseIntoOnePairedEntry() {
+        let a = UUID(), b = UUID()
+        let aToB = NodeConnection(fromNodeID: a, toNodeID: b)
+        let bToA = NodeConnection(fromNodeID: b, toNodeID: a)
+
+        let pairs = primaryConnections([aToB, bToA])
+
+        #expect(pairs.count == 1)
+        #expect(pairs[0].primary.id == aToB.id)
+        #expect(pairs[0].reverse?.id == bToA.id)
+    }
+
+    @Test func eachConnectionAppearsExactlyOnceAcrossAllPairs() {
+        let a = UUID(), b = UUID(), c = UUID()
+        let aToB = NodeConnection(fromNodeID: a, toNodeID: b)
+        let bToA = NodeConnection(fromNodeID: b, toNodeID: a)
+        let bToC = NodeConnection(fromNodeID: b, toNodeID: c)
+
+        let pairs = primaryConnections([aToB, bToA, bToC])
+
+        let allIDs = pairs.flatMap { [$0.primary.id] + ($0.reverse.map { [$0.id] } ?? []) }
+        #expect(Set(allIDs) == Set([aToB.id, bToA.id, bToC.id]))
+        #expect(allIDs.count == 3)
+    }
+
+    @Test func orphanedConnectionsAreNeverPairedEvenIfEndpointsMirror() {
+        let a = UUID(), b = UUID()
+        var aToB = NodeConnection(fromNodeID: a, toNodeID: b)
+        aToB.isOrphaned = true
+        let bToA = NodeConnection(fromNodeID: b, toNodeID: a)
+
+        let pairs = primaryConnections([aToB, bToA])
+
+        #expect(pairs.count == 2)
+        #expect(pairs.allSatisfy { $0.reverse == nil })
+    }
+}
+
+// MARK: - CodeIndexView
+
+@MainActor
+@Suite("CodeIndexView")
+struct CodeIndexViewTests {
+
+    @Test func truncatedDescriptionLeavesShortTextUnchanged() {
+        let view = CodeIndexView(vm: StoryViewModel(), isCollapsed: .constant(false))
+        #expect(view.truncatedDescription("Short") == "Short")
+        #expect(view.truncatedDescription("Exactly 15 char") == "Exactly 15 char")
+    }
+
+    @Test func truncatedDescriptionCutsLongTextAndAppendsEllipsis() {
+        let view = CodeIndexView(vm: StoryViewModel(), isCollapsed: .constant(false))
+        #expect(view.truncatedDescription("This description is much too long") == "This descriptio...")
+    }
+
+    @Test func sortedCodesDedupesAndPrefersFirstNonEmptyDescription() {
+        let vm = StoryViewModel()
+        vm.nodes = [
+            StoryNode(codes: [EntryCode(code: "AB12", description: "Has the key")]),
+            StoryNode(codes: [EntryCode(code: "AB12", description: ""),
+                              EntryCode(code: "X", description: "Short one")]),
+        ]
+        let view = CodeIndexView(vm: vm, isCollapsed: .constant(false))
+
+        let codes = view.sortedCodes
+        #expect(codes.count == 2)
+        #expect(codes.first { $0.code == "AB12" }?.description == "Has the key")
+    }
+
+    @Test func sortedCodesExcludesBlankCodesAndTrimsWhitespace() {
+        let vm = StoryViewModel()
+        vm.nodes = [StoryNode(codes: [EntryCode(code: "   ", description: "ignored"),
+                                      EntryCode(code: "  Z9 ", description: " trimmed ")])]
+        let view = CodeIndexView(vm: vm, isCollapsed: .constant(false))
+
+        let codes = view.sortedCodes
+        #expect(codes.count == 1)
+        #expect(codes[0].code == "Z9")
+        #expect(codes[0].description == "trimmed")
+    }
+}
+
+// MARK: - StoryViewModel: replaceIDReferences (Export as Text)
+
+@MainActor
+@Suite("replaceIDReferences")
+struct ReplaceIDReferencesTests {
+
+    @Test func replacesMatchedReferenceWithEntryNumber() {
+        let vm = StoryViewModel()
+        let result = vm.replaceIDReferences(in: "Go to {1A2B3C4D/Chapter Two}", using: ["1A2B3C4D": 3])
+        #expect(result == "Go to → Entry 3")
+    }
+
+    @Test func leavesUnmatchedReferenceUnchanged() {
+        let vm = StoryViewModel()
+        let text = "Go to {1A2B3C4D/Chapter Two}"
+        let result = vm.replaceIDReferences(in: text, using: [:])
+        #expect(result == text)
+    }
+
+    @Test func leavesTextWithoutAnyReferenceUnchanged() {
+        let vm = StoryViewModel()
+        let text = "Just plain dialogue, no links here."
+        let result = vm.replaceIDReferences(in: text, using: ["1A2B3C4D": 1])
+        #expect(result == text)
+    }
+
+    @Test func replacesMultipleReferencesIndependently() {
+        let vm = StoryViewModel()
+        let text = "First {11111111/A} then {22222222/B} then {33333333/C}"
+        let result = vm.replaceIDReferences(in: text, using: ["11111111": 1, "33333333": 3])
+        #expect(result == "First → Entry 1 then {22222222/B} then → Entry 3")
+    }
+}
+
+// MARK: - toggleBulletList
+
+@MainActor
+@Suite("toggleBulletList")
+struct ToggleBulletListTests {
+
+    // No NSTextView is focused in the unit test environment, so these exercise
+    // the fallback path that appends a bullet directly to the bound text.
+
+    @Test func appendsBulletWithoutLeadingNewlineWhenTextIsEmpty() {
+        var text = AttributedString("")
+        toggleBulletList(text: Binding(get: { text }, set: { text = $0 }))
+        #expect(String(text.characters) == "• ")
+    }
+
+    @Test func appendsBulletWithLeadingNewlineWhenTextIsNotEmpty() {
+        var text = AttributedString("Existing line")
+        toggleBulletList(text: Binding(get: { text }, set: { text = $0 }))
+        #expect(String(text.characters) == "Existing line\n• ")
     }
 }

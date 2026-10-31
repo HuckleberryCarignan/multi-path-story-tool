@@ -38,12 +38,23 @@ class StoryViewModel {
     var hasUnsavedChanges: Bool = false
     var startNodeID: UUID?      = nil
     private var suppressChangeTracking = false
+    private var autoSaveTimer: Timer?
 
     // Weakly held so we don't create a retain cycle with the window's UndoManager.
     weak var undoManager: UndoManager?
 
     var documentTitle: String {
         currentFileURL.map { $0.deletingPathExtension().lastPathComponent } ?? "Untitled"
+    }
+
+    init() {
+        autoSaveTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            self?.autoSaveIfNeeded()
+        }
+    }
+
+    deinit {
+        autoSaveTimer?.invalidate()
     }
 
     // MARK: - Undo / Redo
@@ -112,6 +123,16 @@ class StoryViewModel {
         } else {
             saveDocumentAs()
         }
+    }
+
+    // Fires every minute while Auto-Save is enabled in Settings. Only ever
+    // writes to a file that's already been saved once — an untitled document
+    // never gets a save panel popped on it automatically.
+    private func autoSaveIfNeeded() {
+        guard UserDefaults.standard.bool(forKey: "autoSaveEnabled"),
+              hasUnsavedChanges,
+              let url = currentFileURL else { return }
+        writeToDisk(url: url)
     }
 
     func saveDocumentAs() {
@@ -186,7 +207,7 @@ class StoryViewModel {
 
     // Replaces {SHORTID/Title} patterns in dialogue with "→ Entry N" using the provided map.
     // References to IDs not in the map (outside the export set) are left unchanged.
-    private func replaceIDReferences(in text: String, using map: [String: Int]) -> String {
+    func replaceIDReferences(in text: String, using map: [String: Int]) -> String {
         guard let regex = try? NSRegularExpression(pattern: #"\{([A-F0-9]{8})/([^}]+)\}"#) else { return text }
         var replacements: [(range: Range<String.Index>, replacement: String)] = []
         regex.enumerateMatches(in: text, range: NSRange(text.startIndex..., in: text)) { match, _, _ in

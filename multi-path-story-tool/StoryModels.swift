@@ -128,6 +128,13 @@ struct NodeConnection: Identifiable, Codable, Equatable {
     var entryPortOverride: String?
     // "top" | "bottom" | "left" | "right" | nil = default (closest to entry)
     var exitPortOverride: String?
+    // Shown in a small box halfway along the connection's line on the canvas.
+    var code: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, fromNodeID, toNodeID, isOrphaned, colorIndex
+        case orphanedFromPos, orphanedToPos, entryPortOverride, exitPortOverride, code
+    }
 
     init(id: UUID = UUID(), fromNodeID: UUID, toNodeID: UUID, colorIndex: Int = 0) {
         self.id = id
@@ -137,5 +144,21 @@ struct NodeConnection: Identifiable, Codable, Equatable {
         self.colorIndex = colorIndex
         self.entryPortOverride = nil
         self.exitPortOverride = nil
+        self.code = ""
+    }
+
+    // Custom decoder: code defaults to "" for old saves written before this field existed.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id                = try c.decode(UUID.self, forKey: .id)
+        fromNodeID        = try c.decode(UUID.self, forKey: .fromNodeID)
+        toNodeID          = try c.decode(UUID.self, forKey: .toNodeID)
+        isOrphaned        = try c.decode(Bool.self, forKey: .isOrphaned)
+        colorIndex        = try c.decode(Int.self, forKey: .colorIndex)
+        orphanedFromPos   = try c.decodeIfPresent(CGPoint.self, forKey: .orphanedFromPos)
+        orphanedToPos     = try c.decodeIfPresent(CGPoint.self, forKey: .orphanedToPos)
+        entryPortOverride = try c.decodeIfPresent(String.self, forKey: .entryPortOverride)
+        exitPortOverride  = try c.decodeIfPresent(String.self, forKey: .exitPortOverride)
+        code              = try c.decodeIfPresent(String.self, forKey: .code) ?? ""
     }
 }

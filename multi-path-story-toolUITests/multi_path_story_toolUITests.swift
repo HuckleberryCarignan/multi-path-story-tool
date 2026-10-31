@@ -39,7 +39,7 @@ final class multi_path_story_toolUITests: XCTestCase {
         app.launchEnvironment["MPST_TEST_OPEN_FILE"] = "/Users/christophercarignan/Documents/Crash.mpst"
         app.launch()
 
-        let introNode = app.staticTexts["Intro"]
+        let introNode = app.staticTexts["Book Intro"]
         XCTAssertTrue(introNode.waitForExistence(timeout: 5), "Intro node should render on the canvas")
 
         introNode.click()

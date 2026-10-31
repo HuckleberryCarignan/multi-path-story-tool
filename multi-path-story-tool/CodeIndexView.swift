@@ -14,7 +14,7 @@ struct CodeIndexView: View {
     @State private var tooltipCode: String?
     @State private var hoverTask: Task<Void, Never>?
 
-    private var sortedCodes: [(code: String, description: String)] {
+    var sortedCodes: [(code: String, description: String)] {
         var descriptionsByCode: [String: String] = [:]
         for entryCode in vm.nodes.flatMap({ $0.codes }) {
             let code = entryCode.code.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -107,7 +107,7 @@ struct CodeIndexView: View {
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
-    private func truncatedDescription(_ description: String) -> String {
+    func truncatedDescription(_ description: String) -> String {
         guard description.count > 15 else { return description }
         return description.prefix(15) + "..."
     }

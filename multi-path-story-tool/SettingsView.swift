@@ -4,6 +4,7 @@ struct SettingsView: View {
     @Bindable var vm: StoryViewModel
     @AppStorage("appearanceMode") private var appearanceMode: String = "dark"
     @AppStorage("showTooltips") private var showTooltips: Bool = true
+    @AppStorage("autoSaveEnabled") private var autoSaveEnabled: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -41,6 +42,10 @@ struct SettingsView: View {
                 Section("Codes") {
                     Toggle("Story Entry", isOn: $vm.showEntryCodesSection)
                     Toggle("Story Canvas", isOn: $vm.showCanvasCodeBadge)
+                }
+
+                Section("Auto-Save") {
+                    Toggle("Save Current File Every Minute", isOn: $autoSaveEnabled)
                 }
 
                 Section("Appearance") {
