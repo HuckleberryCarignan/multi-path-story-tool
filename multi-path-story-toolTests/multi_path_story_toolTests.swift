@@ -858,3 +858,91 @@ struct ToggleBulletListTests {
         #expect(String(text.characters) == "Existing line\n• ")
     }
 }
+
+// MARK: - StoryViewModel: GitHub push (parsing & request-body helpers)
+//
+// Only the pure, no-I/O pieces of the GitHub push feature are tested here.
+// The actual network call and GitHubTokenStore's Keychain access are
+// deliberately left untested: hitting api.github.com needs a real token and
+// network access, and exercising Keychain from an automated test risks
+// overwriting whatever token the person running the tests already saved.
+
+@MainActor
+@Suite("parseGitHubRepo")
+struct ParseGitHubRepoTests {
+
+    @Test func parsesOwnerAndRepoFromASlashSeparatedSetting() {
+        let vm = StoryViewModel()
+        let result = vm.parseGitHubRepo("HuckleberryCarignan/stories")
+        #expect(result?.owner == "HuckleberryCarignan")
+        #expect(result?.repo == "stories")
+    }
+
+    @Test func returnsNilWhenThereIsNoSlash() {
+        let vm = StoryViewModel()
+        #expect(vm.parseGitHubRepo("justonename") == nil)
+    }
+
+    @Test func returnsNilWhenEitherHalfIsBlank() {
+        let vm = StoryViewModel()
+        #expect(vm.parseGitHubRepo("/stories") == nil)
+        #expect(vm.parseGitHubRepo("HuckleberryCarignan/") == nil)
+    }
+
+    @Test func returnsNilForAnEmptySetting() {
+        let vm = StoryViewModel()
+        #expect(vm.parseGitHubRepo("") == nil)
+    }
+
+    @Test func onlySplitsOnTheFirstSlash() {
+        let vm = StoryViewModel()
+        let result = vm.parseGitHubRepo("owner/repo/extra")
+        #expect(result?.owner == "owner")
+        #expect(result?.repo == "repo/extra")
+    }
+}
+
+// MARK: - StoryViewModel: resolveGitHubBranch
+
+@MainActor
+@Suite("resolveGitHubBranch")
+struct ResolveGitHubBranchTests {
+
+    @Test func defaultsToMainWhenBlank() {
+        let vm = StoryViewModel()
+        #expect(vm.resolveGitHubBranch("") == "main")
+    }
+
+    @Test func keepsAnExplicitlyConfiguredBranch() {
+        let vm = StoryViewModel()
+        #expect(vm.resolveGitHubBranch("develop") == "develop")
+    }
+}
+
+// MARK: - StoryViewModel: githubCommitBody
+
+@MainActor
+@Suite("githubCommitBody")
+struct GitHubCommitBodyTests {
+
+    @Test func includesBase64ContentMessageAndBranch() {
+        let vm = StoryViewModel()
+        let data = Data("hello".utf8)
+        let body = vm.githubCommitBody(path: "Story.mpst", contentData: data, branch: "main", existingSHA: nil)
+        #expect(body["content"] as? String == data.base64EncodedString())
+        #expect(body["branch"] as? String == "main")
+        #expect((body["message"] as? String)?.contains("Story.mpst") == true)
+    }
+
+    @Test func omitsSHAWhenCreatingANewFile() {
+        let vm = StoryViewModel()
+        let body = vm.githubCommitBody(path: "Story.mpst", contentData: Data(), branch: "main", existingSHA: nil)
+        #expect(body["sha"] == nil)
+    }
+
+    @Test func includesSHAWhenUpdatingAnExistingFile() {
+        let vm = StoryViewModel()
+        let body = vm.githubCommitBody(path: "Story.mpst", contentData: Data(), branch: "main", existingSHA: "abc123")
+        #expect(body["sha"] as? String == "abc123")
+    }
+}

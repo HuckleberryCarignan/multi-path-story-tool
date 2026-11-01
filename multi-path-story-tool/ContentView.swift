@@ -11,6 +11,7 @@ struct ContentView: View {
     @Environment(\.undoManager) private var undoManager
     @AppStorage("appearanceMode") private var appearanceMode: String = "dark"
     @AppStorage("showTooltips") private var showTooltips: Bool = true
+    @AppStorage("enableGitHubPush") private var enableGitHubPush: Bool = false
 
     private let minPanelWidth: CGFloat = 200
     private let maxPanelWidth: CGFloat = 500
@@ -123,6 +124,16 @@ struct ContentView: View {
                         Label("Export Randomized Story As Text", systemImage: "doc.plaintext")
                     }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
+
+                    if enableGitHubPush {
+                        Divider()
+
+                        Button { vm.pushToGitHub() } label: {
+                            Label("Save and Push to GitHub", systemImage: "icloud.and.arrow.up")
+                        }
+                        .keyboardShortcut("p", modifiers: [.command, .shift])
+                        .disabled(vm.isPushingToRemote)
+                    }
                 } label: {
                     Label("File", systemImage: "doc")
                 }

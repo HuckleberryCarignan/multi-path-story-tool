@@ -37,6 +37,7 @@ class StoryViewModel {
     var currentFileURL: URL?    = nil
     var hasUnsavedChanges: Bool = false
     var startNodeID: UUID?      = nil
+    var isPushingToRemote: Bool = false
     private var suppressChangeTracking = false
     private var autoSaveTimer: Timer?
 
@@ -225,6 +226,141 @@ class StoryViewModel {
             result.replaceSubrange(range, with: replacement)
         }
         return result
+    }
+
+    // MARK: - GitHub push
+
+    // Pushes the current file to the repo root of the GitHub repository
+    // configured in Settings, using the Contents API over HTTPS (not the git
+    // binary) since the app's sandbox blocks access to ~/.ssh and system git.
+    func pushToGitHub() {
+        if hasUnsavedChanges, let url = currentFileURL {
+            guard writeToDisk(url: url) else { return }
+        }
+        guard let url = currentFileURL else {
+            showGitHubAlert(style: .warning, title: "Save the story first",
+                             message: "Choose File > Save before pushing to GitHub.")
+            return
+        }
+        let repoSetting = UserDefaults.standard.string(forKey: "githubRepo") ?? ""
+        guard let (owner, repo) = parseGitHubRepo(repoSetting) else {
+            showGitHubAlert(style: .warning, title: "Could not push to GitHub",
+                             message: "Set a GitHub repository (owner/repo) in Settings first.")
+            return
+        }
+        guard let token = GitHubTokenStore.load(), !token.isEmpty else {
+            showGitHubAlert(style: .warning, title: "Could not push to GitHub",
+                             message: "Set a GitHub Personal Access Token in Settings first.")
+            return
+        }
+        guard let fileData = try? Data(contentsOf: url) else {
+            showGitHubAlert(style: .warning, title: "Could not push to GitHub",
+                             message: "Could not read the saved file from disk.")
+            return
+        }
+        let branch = resolveGitHubBranch(UserDefaults.standard.string(forKey: "githubBranch") ?? "")
+        let fileName = url.lastPathComponent
+
+        isPushingToRemote = true
+        Task {
+            do {
+                try await putFileOnGitHub(owner: owner, repo: repo, branch: branch,
+                                           path: fileName, data: fileData, token: token)
+                isPushingToRemote = false
+                showGitHubAlert(style: .informational, title: "Pushed to GitHub",
+                                 message: "\(fileName) was pushed to \(owner)/\(repo)@\(branch).")
+            } catch {
+                isPushingToRemote = false
+                showGitHubAlert(style: .warning, title: "Could not push to GitHub",
+                                 message: error.localizedDescription)
+            }
+        }
+    }
+
+    // Splits "owner/repo" into its two halves; nil if there's no slash or
+    // either half is blank. maxSplits: 1 means a repo name containing "/"
+    // (unusual, but technically allowed by GitHub) still parses correctly.
+    func parseGitHubRepo(_ setting: String) -> (owner: String, repo: String)? {
+        let parts = setting.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+        return (parts[0], parts[1])
+    }
+
+    // Falls back to "main" when the configured branch is blank.
+    func resolveGitHubBranch(_ setting: String) -> String {
+        setting.isEmpty ? "main" : setting
+    }
+
+    // Builds the JSON body for the Contents API PUT. Omits "sha" entirely when
+    // creating a new file — GitHub rejects a PUT that includes a sha for a
+    // path that doesn't exist yet.
+    func githubCommitBody(path: String, contentData: Data, branch: String, existingSHA: String?) -> [String: Any] {
+        var body: [String: Any] = [
+            "message": "Update \(path) via multi-path-story-tool",
+            "content": contentData.base64EncodedString(),
+            "branch": branch,
+        ]
+        if let existingSHA { body["sha"] = existingSHA }
+        return body
+    }
+
+    private func showGitHubAlert(style: NSAlert.Style, title: String, message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = style
+        alert.messageText = title
+        alert.informativeText = message
+        alert.runModal()
+    }
+
+    private struct GitHubContentsResponse: Decodable { let sha: String }
+    private struct GitHubErrorResponse: Decodable { let message: String }
+
+    // Looks up the file's current sha (so the commit replaces rather than
+    // conflicts with it), then PUTs the new content via the Contents API.
+    private func putFileOnGitHub(owner: String, repo: String, branch: String,
+                                  path: String, data: Data, token: String) async throws {
+        guard let encodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            throw NSError(domain: "GitHubPush", code: -1,
+                           userInfo: [NSLocalizedDescriptionKey: "Invalid file name."])
+        }
+        let base = "https://api.github.com/repos/\(owner)/\(repo)/contents/\(encodedPath)"
+
+        func authorizedRequest(_ url: URL) -> URLRequest {
+            var req = URLRequest(url: url)
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            req.setValue("multi-path-story-tool", forHTTPHeaderField: "User-Agent")
+            return req
+        }
+
+        guard var getComponents = URLComponents(string: base) else {
+            throw NSError(domain: "GitHubPush", code: -1,
+                           userInfo: [NSLocalizedDescriptionKey: "Invalid repository URL."])
+        }
+        getComponents.queryItems = [URLQueryItem(name: "ref", value: branch)]
+        let (getData, getResponse) = try await URLSession.shared.data(for: authorizedRequest(getComponents.url!))
+        let existingSHA: String? = (getResponse as? HTTPURLResponse)?.statusCode == 200
+            ? (try? JSONDecoder().decode(GitHubContentsResponse.self, from: getData))?.sha
+            : nil
+
+        guard let putURL = URL(string: base) else {
+            throw NSError(domain: "GitHubPush", code: -1,
+                           userInfo: [NSLocalizedDescriptionKey: "Invalid repository URL."])
+        }
+        var putRequest = authorizedRequest(putURL)
+        putRequest.httpMethod = "PUT"
+        putRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = githubCommitBody(path: path, contentData: data, branch: branch, existingSHA: existingSHA)
+        putRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (putData, putResponse) = try await URLSession.shared.data(for: putRequest)
+        let statusCode = (putResponse as? HTTPURLResponse)?.statusCode ?? -1
+        guard (200...299).contains(statusCode) else {
+            let message = (try? JSONDecoder().decode(GitHubErrorResponse.self, from: putData))?.message
+                ?? "GitHub returned HTTP \(statusCode)."
+            throw NSError(domain: "GitHubPush", code: statusCode,
+                           userInfo: [NSLocalizedDescriptionKey: message])
+        }
     }
 
     func openDocument() {

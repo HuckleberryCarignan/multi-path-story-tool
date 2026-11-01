@@ -5,6 +5,10 @@ struct SettingsView: View {
     @AppStorage("appearanceMode") private var appearanceMode: String = "dark"
     @AppStorage("showTooltips") private var showTooltips: Bool = true
     @AppStorage("autoSaveEnabled") private var autoSaveEnabled: Bool = false
+    @AppStorage("enableGitHubPush") private var enableGitHubPush: Bool = false
+    @AppStorage("githubRepo") private var githubRepo: String = ""
+    @AppStorage("githubBranch") private var githubBranch: String = "main"
+    @State private var githubToken: String = GitHubTokenStore.load() ?? ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -46,6 +50,19 @@ struct SettingsView: View {
 
                 Section("Auto-Save") {
                     Toggle("Save Current File Every Minute", isOn: $autoSaveEnabled)
+                }
+
+                Section("GitHub") {
+                    Toggle("Enable GitHub Push", isOn: $enableGitHubPush)
+
+                    if enableGitHubPush {
+                        TextField("Repository (owner/repo)", text: $githubRepo)
+                        TextField("Branch", text: $githubBranch)
+                        SecureField("Personal Access Token", text: $githubToken)
+                        Button("Save Token") {
+                            GitHubTokenStore.save(githubToken)
+                        }
+                    }
                 }
 
                 Section("Appearance") {
