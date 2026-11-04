@@ -16,6 +16,7 @@ struct StoryNodeView: View {
 
     private var textAlignment: TextAlignment { .center }
     private var stackAlignment: HorizontalAlignment { .center }
+    private var showsCodeBadge: Bool { vm.showCanvasCodeBadge && !node.codes.isEmpty }
 
     var body: some View {
         VStack(alignment: stackAlignment, spacing: 3) {
@@ -42,9 +43,12 @@ struct StoryNodeView: View {
                     .multilineTextAlignment(textAlignment)
             }
         }
-        .padding(.horizontal, 10)
+        // Extra leading padding when the code badge is shown, so its ~20%
+        // overlap onto this edge never sits on top of the title/identifier text.
+        .padding(.leading, showsCodeBadge ? 10 + codeBadgeOverlap : 10)
+        .padding(.trailing, 10)
         .padding(.vertical, 10)
-        .frame(minWidth: nodeWidth, maxWidth: nodeWidth, minHeight: nodeHeight)
+        .frame(minWidth: nodeWidth, maxWidth: nodeWidth, minHeight: cardMinHeight)
         .background(
             RoundedRectangle(cornerRadius: 10)
                 .fill(cardBackground)
@@ -65,7 +69,7 @@ struct StoryNodeView: View {
             }
         }
         .overlay(alignment: .leading) {
-            if vm.showCanvasCodeBadge && !node.codes.isEmpty {
+            if showsCodeBadge {
                 codeBadge
             }
         }
@@ -128,6 +132,27 @@ struct StoryNodeView: View {
     // Width sized for 4 monospaced characters plus horizontal padding.
     private var codeBadgeWidth: CGFloat { 38 }
 
+    // How much of the badge overlaps onto the entry box's leading edge — the
+    // rest sticks out past it like a tab. Shared with the leading-padding
+    // calculation above so the title text is never drawn under that overlap.
+    private var codeBadgeOverlap: CGFloat { codeBadgeWidth * 0.2 }
+
+    // Each code row's rendered height, derived from the original tuning
+    // (nodeHeight - 12 fit exactly 3 rows) plus a small safety buffer.
+    private var codeRowHeight: CGFloat { (nodeHeight - 12) / 3 + 2 }
+
+    // How tall the side badge needs to be for however many codes this entry
+    // has — used both to size the badge and, via cardMinHeight below, to keep
+    // the entry box itself taller than the badge no matter how many codes it holds.
+    private var codeBadgeHeight: CGFloat {
+        max(nodeHeight - 12, codeRowHeight * CGFloat(node.codes.count))
+    }
+
+    // The entry box must always be larger than its own code-word side badge.
+    private var cardMinHeight: CGFloat {
+        showsCodeBadge ? codeBadgeHeight + 12 : nodeHeight
+    }
+
     private var codeBadge: some View {
         VStack(alignment: .leading, spacing: 1) {
             ForEach(node.codes) { entry in
@@ -136,7 +161,8 @@ struct StoryNodeView: View {
                     .lineLimit(1)
             }
         }
-        .frame(width: codeBadgeWidth, height: nodeHeight - 12, alignment: .topLeading)
+        .frame(minWidth: codeBadgeWidth, maxWidth: codeBadgeWidth,
+               minHeight: codeBadgeHeight, alignment: .topLeading)
         .padding(.horizontal, 4)
         .background(
             RoundedRectangle(cornerRadius: 6)
@@ -147,9 +173,7 @@ struct StoryNodeView: View {
                 .stroke(borderColor, lineWidth: borderWidth)
         )
         .clipShape(RoundedRectangle(cornerRadius: 6))
-        // Shifted left so only ~20% of the badge overlaps the entry box;
-        // the rest sticks out past its leading edge like a tab.
-        .offset(x: -codeBadgeWidth * 0.8)
+        .offset(x: codeBadgeOverlap - codeBadgeWidth)
         .allowsHitTesting(false)
     }
 
