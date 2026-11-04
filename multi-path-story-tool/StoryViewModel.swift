@@ -711,7 +711,7 @@ class StoryViewModel {
 
     // MARK: - Entry code management
 
-    let maxEntryCodes = 3
+    let maxEntryCodes = 4
     let maxCodeLength = 4
 
     func addCode(to nodeID: UUID) {

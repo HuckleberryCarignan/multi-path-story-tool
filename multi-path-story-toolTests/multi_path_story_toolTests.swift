@@ -377,6 +377,13 @@ struct StoryViewModelEntryCodeTests {
         #expect(vm.nodes[0].codes.count == vm.maxEntryCodes)
     }
 
+    // Each Story Entry supports up to 4 codes; pinned here so a future change
+    // to the constant is a deliberate decision, not an accidental regression.
+    @Test func maxEntryCodesIsFour() {
+        let vm = StoryViewModel()
+        #expect(vm.maxEntryCodes == 4)
+    }
+
     @Test func removeCodeDeletesOnlyTheMatchingEntry() {
         let vm = StoryViewModel()
         var node = StoryNode(position: .zero)
